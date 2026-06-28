@@ -15,6 +15,9 @@ const COLOR_WHITE: u16 = 0xFFFF;
 // RETRO_ENVIRONMENT_SHUTDOWN asks the frontend to close the core
 const ENVIRONMENT_SHUTDOWN: c_uint = 7;
 
+// RETRO_ENVIRONMENT_SET_SUPPORT_NO_GAME allows the core to run without any content
+const ENVIRONMENT_SET_SUPPORT_NO_GAME: c_uint = 17;
+
 #[no_mangle]
 pub unsafe extern "C" fn retro_get_system_info(info: *mut c_void) {
     let info = info as *mut libretro_sys::SystemInfo;
@@ -24,8 +27,8 @@ pub unsafe extern "C" fn retro_get_system_info(info: *mut c_void) {
     // Set extensions to empty string to allow "Start Core" without any ROM file.
     (*info).valid_extensions = b"\0".as_ptr() as *const c_char;
     
-    // Set to true to prevent RetroArch from loading file data into memory automatically.
-    (*info).need_fullpath = true;
+    // Set to false so RetroArch does not require a ROM file path.
+    (*info).need_fullpath = false;
 }
 
 #[no_mangle]
@@ -33,6 +36,11 @@ pub unsafe extern "C" fn retro_set_environment(cb: unsafe extern "C" fn(c_uint, 
     ENVIRON_CB = Some(cb);
     let format = libretro_sys::PixelFormat::RGB565;
     cb(libretro_sys::ENVIRONMENT_SET_PIXEL_FORMAT, &format as *const _ as *mut c_void);
+
+    // Tell the frontend this core can run without any content
+    let mut supported = true;
+    cb(ENVIRONMENT_SET_SUPPORT_NO_GAME, &mut supported as *mut _ as *mut c_void);
+
     true
 }
 
