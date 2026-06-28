@@ -34,15 +34,17 @@ pub unsafe extern "C" fn retro_get_system_info(info: *mut c_void) {
 #[no_mangle]
 pub unsafe extern "C" fn retro_set_environment(cb: unsafe extern "C" fn(c_uint, *mut c_void) -> bool) -> bool {
     ENVIRON_CB = Some(cb);
-    let format = libretro_sys::PixelFormat::RGB565;
-    cb(libretro_sys::ENVIRONMENT_SET_PIXEL_FORMAT, &format as *const _ as *mut c_void);
 
-    // Tell the frontend this core can run without any content
+    // Must be called first, before any other environment calls
     let mut supported = true;
     cb(ENVIRONMENT_SET_SUPPORT_NO_GAME, &mut supported as *mut _ as *mut c_void);
 
+    let format = libretro_sys::PixelFormat::RGB565;
+    cb(libretro_sys::ENVIRONMENT_SET_PIXEL_FORMAT, &format as *const _ as *mut c_void);
+
     true
 }
+
 
 #[no_mangle]
 pub unsafe extern "C" fn retro_set_video_refresh(cb: unsafe extern "C" fn(*const c_void, c_uint, c_uint, usize)) {
