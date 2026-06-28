@@ -12,15 +12,9 @@ static mut ENVIRON_CB:  Option<unsafe extern "C" fn(c_uint, *mut c_void) -> bool
 const COLOR_GREEN: u16 = 0x07E0;
 const COLOR_WHITE: u16 = 0xFFFF;
 
-// RETRO_ENVIRONMENT_SHUTDOWN asks the frontend to close the core
-const ENVIRONMENT_SHUTDOWN: c_uint = 7;
-
-// Fixed: Changed from 17 to 18 to correctly match the Libretro API specification
-const ENVIRONMENT_SET_SUPPORT_NO_GAME: c_uint = 18;
-
 #[no_mangle]
 pub unsafe extern "C" fn retro_get_system_info(info: *mut c_void) {
-    let info = info as *mut libretro_sys::SystemInfo;
+    let info = info as *mut rust_libretro_sys::SystemInfo;
     (*info).library_name = b"Pyxel\0".as_ptr() as *const c_char;
     (*info).library_version = b"0.1.0\0".as_ptr() as *const c_char;
     
@@ -33,11 +27,11 @@ pub unsafe extern "C" fn retro_get_system_info(info: *mut c_void) {
 pub unsafe extern "C" fn retro_set_environment(cb: unsafe extern "C" fn(c_uint, *mut c_void) -> bool) -> bool {
     ENVIRON_CB = Some(cb);
     
-    let format = libretro_sys::PixelFormat::RGB565;
-    cb(libretro_sys::ENVIRONMENT_SET_PIXEL_FORMAT, &format as *const _ as *mut c_void);
+    let format = rust_libretro_sys::PIXEL_FORMAT_RGB565;
+    cb(rust_libretro_sys::ENVIRONMENT_SET_PIXEL_FORMAT, &format as *const _ as *mut c_void);
 
     let support_no_game = true;
-    cb(ENVIRONMENT_SET_SUPPORT_NO_GAME, &support_no_game as *const _ as *mut c_void);
+    cb(rust_libretro_sys::ENVIRONMENT_SET_SUPPORT_NO_GAME, &support_no_game as *const _ as *mut c_void);
 
     true
 }
@@ -91,7 +85,7 @@ pub unsafe extern "C" fn retro_run() {
 
     let frame_buffer = if select_pressed {
         if let Some(environ_cb) = ENVIRON_CB {
-            environ_cb(ENVIRONMENT_SHUTDOWN, std::ptr::null_mut());
+            environ_cb(rust_libretro_sys::ENVIRONMENT_SHUTDOWN, std::ptr::null_mut());
         }
         [COLOR_WHITE; WIDTH * HEIGHT]
     } else {
@@ -116,7 +110,7 @@ pub unsafe extern "C" fn retro_run() {
 
 #[no_mangle]
 pub unsafe extern "C" fn retro_get_system_av_info(info: *mut c_void) {
-    let info = info as *mut libretro_sys::SystemAvInfo;
+    let info = info as *mut rust_libretro_sys::SystemAvInfo;
     (*info).geometry.base_width = 256;
     (*info).geometry.base_height = 256;
     (*info).geometry.max_width = 256;
@@ -126,7 +120,7 @@ pub unsafe extern "C" fn retro_get_system_av_info(info: *mut c_void) {
     (*info).timing.sample_rate = 44100.0;
 }
 
-#[no_mangle] pub unsafe extern "C" fn retro_api_version() -> c_uint { libretro_sys::API_VERSION }
+#[no_mangle] pub unsafe extern "C" fn retro_api_version() -> c_uint { rust_libretro_sys::API_VERSION as c_uint }
 #[no_mangle] pub unsafe extern "C" fn retro_unserialize(_data: *const c_void, _size: usize) -> bool { false }
 #[no_mangle] pub unsafe extern "C" fn retro_serialize(_data: *mut c_void, _size: usize) -> bool { false }
 #[no_mangle] pub unsafe extern "C" fn retro_serialize_size() -> usize { 0 }

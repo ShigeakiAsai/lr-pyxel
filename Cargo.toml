@@ -4,10 +4,8 @@ version = "0.2.0"
 edition = "2021"
 
 [lib]
-# Build as a dynamic library (cdylib) for Libretro core compatibility
 crate-type = ["cdylib"]
 
 [dependencies]
-# Low-level bindings for the Libretro API
-libretro-sys = "0.2.0"
-pyxel = "2.2.8"
+rust-libretro-sys = "0.3.2"
+pyxel = "2.9.6"
