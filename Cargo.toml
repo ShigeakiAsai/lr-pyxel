@@ -7,4 +7,4 @@ edition = "2021"
 crate-type = ["cdylib"]
 
 [dependencies]
-rust-libretro-sys = { version = "0.3.2", features = ["pre-generated"] }
+rust-libretro-sys = "0.3.2"
