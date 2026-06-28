@@ -32,7 +32,7 @@ pub unsafe extern "C" fn retro_get_system_info(info: *mut c_void) {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn retro_set_environment(cb: unsafe extern "C" fn(c_uint, *mut c_void) -> bool) -> bool {
+pub unsafe extern "C" fn retro_set_environment(cb: unsafe extern "C" fn(c_uint, *mut c_void) -> bool) {
     ENVIRON_CB = Some(cb);
 
     // Must be called first, before any other environment calls.
@@ -42,8 +42,6 @@ pub unsafe extern "C" fn retro_set_environment(cb: unsafe extern "C" fn(c_uint, 
 
     let format = libretro_sys::PixelFormat::RGB565;
     cb(libretro_sys::ENVIRONMENT_SET_PIXEL_FORMAT, &format as *const _ as *mut c_void);
-
-    true
 }
 
 
