@@ -3,7 +3,17 @@
 
 use std::os::raw::{c_char, c_uint, c_void};
 
-static mut VIDEO_CB: Option<unsafe extern "C" fn(*const c_void, c_uint, c_uint, usize)> = None;
+static mut VIDEO_CB:    Option<unsafe extern "C" fn(*const c_void, c_uint, c_uint, usize)> = None;
+static mut INPUT_POLL:  Option<unsafe extern "C" fn()>                                      = None;
+static mut INPUT_STATE: Option<unsafe extern "C" fn(c_uint, c_uint, c_uint, c_uint) -> i16> = None;
+static mut ENVIRON_CB:  Option<unsafe extern "C" fn(c_uint, *mut c_void) -> bool>           = None;
+
+// RGB565: white (0xFFFF) used for the exit flash
+const COLOR_GREEN: u16 = 0x07E0;
+const COLOR_WHITE: u16 = 0xFFFF;
+
+// RETRO_ENVIRONMENT_SHUTDOWN asks the frontend to close the core
+const ENVIRONMENT_SHUTDOWN: c_uint = 7;
 
 #[no_mangle]
 pub unsafe extern "C" fn retro_get_system_info(info: *mut c_void) {
@@ -20,6 +30,7 @@ pub unsafe extern "C" fn retro_get_system_info(info: *mut c_void) {
 
 #[no_mangle]
 pub unsafe extern "C" fn retro_set_environment(cb: unsafe extern "C" fn(c_uint, *mut c_void) -> bool) -> bool {
+    ENVIRON_CB = Some(cb);
     let format = libretro_sys::PixelFormat::RGB565;
     cb(libretro_sys::ENVIRONMENT_SET_PIXEL_FORMAT, &format as *const _ as *mut c_void);
     true
@@ -39,14 +50,35 @@ pub unsafe extern "C" fn retro_load_game(_game: *const c_void) -> bool {
 pub unsafe extern "C" fn retro_run() {
     const WIDTH: usize = 256;
     const HEIGHT: usize = 256;
-    let frame_buffer = [0x07E0u16; WIDTH * HEIGHT];
+
+    // Poll input state from the frontend
+    if let Some(poll) = INPUT_POLL {
+        poll();
+    }
+
+    // Check A button (RETRO_DEVICE_ID_JOYPAD_A = 8)
+    let a_pressed = INPUT_STATE
+        .map(|f| f(0, libretro_sys::DEVICE_JOYPAD, 0, 8))
+        .unwrap_or(0);
+
+    let color = if a_pressed != 0 {
+        // Flash white for one frame, then request shutdown
+        if let Some(env) = ENVIRON_CB {
+            env(ENVIRONMENT_SHUTDOWN, std::ptr::null_mut());
+        }
+        COLOR_WHITE
+    } else {
+        COLOR_GREEN
+    };
+
+    let frame_buffer = [color; WIDTH * HEIGHT];
 
     if let Some(video_cb) = VIDEO_CB {
         video_cb(
-            frame_buffer.as_ptr() as *const c_void, 
-            WIDTH as c_uint, 
-            HEIGHT as c_uint, 
-            WIDTH * 2
+            frame_buffer.as_ptr() as *const c_void,
+            WIDTH as c_uint,
+            HEIGHT as c_uint,
+            WIDTH * 2,
         );
     }
 }
@@ -58,8 +90,8 @@ pub unsafe extern "C" fn retro_run() {
 #[no_mangle] pub unsafe extern "C" fn retro_reset() {}
 #[no_mangle] pub unsafe extern "C" fn retro_set_audio_sample(_cb: unsafe extern "C" fn(i16, i16)) {}
 #[no_mangle] pub unsafe extern "C" fn retro_set_audio_sample_batch(_cb: unsafe extern "C" fn(*const i16, usize) -> usize) -> usize { 0 }
-#[no_mangle] pub unsafe extern "C" fn retro_set_input_poll(_cb: unsafe extern "C" fn()) {}
-#[no_mangle] pub unsafe extern "C" fn retro_set_input_state(_cb: unsafe extern "C" fn(c_uint, c_uint, c_uint, c_uint) -> i16) {}
+#[no_mangle] pub unsafe extern "C" fn retro_set_input_poll(cb: unsafe extern "C" fn()) { INPUT_POLL = Some(cb); }
+#[no_mangle] pub unsafe extern "C" fn retro_set_input_state(cb: unsafe extern "C" fn(c_uint, c_uint, c_uint, c_uint) -> i16) { INPUT_STATE = Some(cb); }
 #[no_mangle] pub unsafe extern "C" fn retro_set_controller_port_device(_port: c_uint, _device: c_uint) {}
 
 #[no_mangle] 
