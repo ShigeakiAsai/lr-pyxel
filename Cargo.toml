@@ -1,0 +1,12 @@
+[package]
+name = "lr-pyxel"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+# Build as a dynamic library (cdylib) for Libretro core compatibility
+crate-type = ["cdylib"]
+
+[dependencies]
+# Low-level bindings for the Libretro API
+libretro-sys = "0.2"
