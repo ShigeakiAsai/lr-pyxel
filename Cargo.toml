@@ -8,4 +8,3 @@ crate-type = ["cdylib"]
 
 [dependencies]
 rust-libretro-sys = "0.3.2"
-pyxel = "2.9.6"
