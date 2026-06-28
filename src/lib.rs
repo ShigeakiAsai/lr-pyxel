@@ -11,10 +11,10 @@ pub unsafe extern "C" fn retro_get_system_info(info: *mut c_void) {
     (*info).library_name = b"Pyxel\0".as_ptr() as *const c_char;
     (*info).library_version = b"0.1.0\0".as_ptr() as *const c_char;
     
-    // Fixed: Set extensions to empty string to allow "Start Core" without any ROM file.
+    // Set extensions to empty string to allow "Start Core" without any ROM file.
     (*info).valid_extensions = b"\0".as_ptr() as *const c_char;
     
-    // Fixed: Set to true to prevent RetroArch from loading file data into memory automatically.
+    // Set to true to prevent RetroArch from loading file data into memory automatically.
     (*info).need_fullpath = true;
 }
 
@@ -57,7 +57,7 @@ pub unsafe extern "C" fn retro_run() {
 #[no_mangle] pub unsafe extern "C" fn retro_unload_game() {}
 #[no_mangle] pub unsafe extern "C" fn retro_reset() {}
 #[no_mangle] pub unsafe extern "C" fn retro_set_audio_sample(_cb: unsafe extern "C" fn(i16, i16)) {}
-#[no_mangle] pub unsafe extern " Scientific extern "C" fn retro_set_audio_sample_batch(_cb: unsafe extern "C" fn(*const i16, usize) -> usize) -> usize { 0 }
+#[no_mangle] pub unsafe extern "C" fn retro_set_audio_sample_batch(_cb: unsafe extern "C" fn(*const i16, usize) -> usize) -> usize { 0 }
 #[no_mangle] pub unsafe extern "C" fn retro_set_input_poll(_cb: unsafe extern "C" fn()) {}
 #[no_mangle] pub unsafe extern "C" fn retro_set_input_state(_cb: unsafe extern "C" fn(c_uint, c_uint, c_uint, c_uint) -> i16) {}
 #[no_mangle] pub unsafe extern "C" fn retro_set_controller_port_device(_port: c_uint, _device: c_uint) {}
