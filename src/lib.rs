@@ -42,7 +42,6 @@ pub unsafe extern "C" fn retro_run() {
     const WIDTH: usize = 256;
     const HEIGHT: usize = 256;
     
-    // Fixed: Allocated on stack to avoid dangerous 'static mut' reference warnings.
     // RGB565 frame buffer filled with retro green (R=0, G=63, B=0 -> 0x07E0)
     let frame_buffer = [0x07E0u16; WIDTH * HEIGHT];
 
@@ -66,6 +65,9 @@ pub unsafe extern "C" fn retro_run() {
 #[no_mangle] pub unsafe extern "C" fn retro_set_audio_sample_batch(_cb: unsafe extern "C" fn(*const i16, usize) -> usize) {}
 #[no_mangle] pub unsafe extern "C" fn retro_set_input_poll(_cb: unsafe extern "C" fn()) {}
 #[no_mangle] pub unsafe extern "C" fn retro_set_input_state(_cb: unsafe extern "C" fn(c_uint, c_uint, c_uint, c_uint) -> i16) {}
+
+// Fixed: Added missing required API function to prevent RetroArch symbol loading crash
+#[no_mangle] pub unsafe extern "C" fn retro_set_controller_port_device(_port: c_uint, _device: c_uint) {}
 
 #[no_mangle] 
 pub unsafe extern "C" fn retro_get_system_av_info(info: *mut c_void) {
