@@ -27,7 +27,7 @@ pub unsafe extern "C" fn retro_get_system_info(info: *mut c_void) {
 pub unsafe extern "C" fn retro_set_environment(cb: unsafe extern "C" fn(c_uint, *mut c_void) -> bool) -> bool {
     ENVIRON_CB = Some(cb);
     
-    let format = rust_libretro_sys::retro_pixel_format_RETRO_PIXEL_FORMAT_RGB565;
+    let format = rust_libretro_sys::RETRO_PIXEL_FORMAT_RGB565;
     cb(rust_libretro_sys::RETRO_ENVIRONMENT_SET_PIXEL_FORMAT, &format as *const _ as *mut c_void);
 
     let support_no_game = true;
