@@ -42,13 +42,14 @@ pub unsafe extern "C" fn retro_run() {
     const WIDTH: usize = 256;
     const HEIGHT: usize = 256;
     
+    // Fixed: Allocated on stack to avoid dangerous 'static mut' reference warnings.
     // RGB565 frame buffer filled with retro green (R=0, G=63, B=0 -> 0x07E0)
-    static mut FRAME_BUFFER: [u16; WIDTH * HEIGHT] = [0x07E0; WIDTH * HEIGHT];
+    let frame_buffer = [0x07E0u16; WIDTH * HEIGHT];
 
     if let Some(video_cb) = VIDEO_CB {
         // Pass the frame buffer data to RetroArch
         video_cb(
-            FRAME_BUFFER.as_ptr() as *const c_void, 
+            frame_buffer.as_ptr() as *const c_void, 
             WIDTH as c_uint, 
             HEIGHT as c_uint, 
             WIDTH * 2 // Pitch: 256 pixels * 2 bytes per pixel
@@ -68,7 +69,6 @@ pub unsafe extern "C" fn retro_run() {
 
 #[no_mangle] 
 pub unsafe extern "C" fn retro_get_system_av_info(info: *mut c_void) {
-    // Fixed: Changed capitalization from SystemAVInfo to SystemAvInfo
     let info = info as *mut libretro_sys::SystemAvInfo;
     (*info).geometry.base_width = 256;
     (*info).geometry.base_height = 256;
@@ -87,7 +87,6 @@ pub unsafe extern "C" fn retro_get_system_av_info(info: *mut c_void) {
 #[no_mangle] pub unsafe extern "C" fn retro_cheat_set(_index: c_uint, _is_enabled: bool, _code: *const c_char) {}
 #[no_mangle] pub unsafe extern "C" fn retro_load_game_special(_game_type: c_uint, _info: *const c_void, _num_info: usize) -> bool { false }
 
-// Fixed: Replaced missing REGION_NTSC constant with literal 0 (NTSC)
 #[no_mangle] pub unsafe extern "C" fn retro_region() -> c_uint { 0 }
 
 #[no_mangle] pub unsafe extern "C" fn retro_get_memory_data(_id: c_uint) -> *mut c_void { std::ptr::null_mut() }
