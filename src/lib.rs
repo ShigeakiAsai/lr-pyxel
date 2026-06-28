@@ -110,6 +110,7 @@ pub unsafe extern "C" fn retro_get_system_av_info(info: *mut c_void) {
 
 #[no_mangle]
 pub unsafe extern "C" fn retro_init() {
+    pyo3::prepare_freethreaded_python();
     Python::with_gil(|py| {
         // Add the libretro core directory to sys.path so pyxel_bridge.py is found
         let sys  = py.import_bound("sys").expect("failed to import sys");

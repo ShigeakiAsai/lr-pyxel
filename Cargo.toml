@@ -8,4 +8,4 @@ crate-type = ["cdylib"]
 
 [dependencies]
 rust-libretro-sys = "0.3.2"
-pyo3 = { version = "0.21", features = ["auto-initialize"] }
+pyo3 = { version = "0.21" }
