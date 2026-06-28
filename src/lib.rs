@@ -36,9 +36,9 @@ pub unsafe extern "C" fn retro_set_environment(cb: unsafe extern "C" fn(c_uint, 
     ENVIRON_CB = Some(cb);
 
     // Must be called first, before any other environment calls.
-    // Use u32 instead of bool to match the C ABI representation reliably.
-    let mut supported: u32 = 1;
-    cb(ENVIRONMENT_SET_SUPPORT_NO_GAME, &mut supported as *mut u32 as *mut c_void);
+    // Use u8 instead of bool to match the C ABI representation reliably.
+    let mut supported: u8 = 1;
+    cb(ENVIRONMENT_SET_SUPPORT_NO_GAME, &mut supported as *mut u8 as *mut c_void);
 
     let format = libretro_sys::PixelFormat::RGB565;
     cb(libretro_sys::ENVIRONMENT_SET_PIXEL_FORMAT, &format as *const _ as *mut c_void);
