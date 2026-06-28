@@ -115,7 +115,7 @@ pub unsafe extern "C" fn retro_init() {
         let sys  = py.import_bound("sys").expect("failed to import sys");
         let path = sys.getattr("path").unwrap();
         let path = path.downcast_into::<pyo3::types::PyList>().unwrap();
-        # path.insert(0, "/usr/lib/libretro").unwrap();
+        // path.insert(0, "/usr/lib/libretro").unwrap();
         path.insert(0, "/storage/cores").unwrap();
 
         match py.import_bound("pyxel_bridge") {
