@@ -113,6 +113,6 @@ pub unsafe extern "C" fn retro_get_system_av_info(info: *mut c_void) {
 #[no_mangle] pub unsafe extern "C" fn retro_cheat_reset() {}
 #[no_mangle] pub unsafe extern "C" fn retro_cheat_set(_index: c_uint, _is_enabled: bool, _code: *const c_char) {}
 #[no_mangle] pub unsafe extern "C" fn retro_load_game_special(_game_type: c_uint, _info: *const c_void, _num_info: usize) -> bool { false }
-#[no_mangle] pub unsafe extern "C" fn retro_region() -> c_uint { 0 }
+#[no_mangle] pub unsafe extern "C" fn retro_get_region() -> c_uint { 0 }
 #[no_mangle] pub unsafe extern "C" fn retro_get_memory_data(_id: c_uint) -> *mut c_void { std::ptr::null_mut() }
 #[no_mangle] pub unsafe extern "C" fn retro_get_memory_size(_id: c_uint) -> usize { 0 }
