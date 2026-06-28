@@ -9,4 +9,4 @@ crate-type = ["cdylib"]
 
 [dependencies]
 # Low-level bindings for the Libretro API
-libretro-sys = "0.2"
+libretro-sys = "0.1.1"
