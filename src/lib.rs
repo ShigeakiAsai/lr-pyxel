@@ -19,7 +19,6 @@ pub unsafe extern "C" fn retro_get_system_info(info: *mut c_void) {
 // Set up environment and negotiate pixel format with the frontend
 #[no_mangle]
 pub unsafe extern "C" fn retro_set_environment(cb: unsafe extern "C" fn(c_uint, *mut c_void) -> bool) -> bool {
-    // In libretro-sys 0.1.1, pixel format options are prefixed with PixelFormat
     let format = libretro_sys::PixelFormat::RGB565;
     cb(libretro_sys::ENVIRONMENT_SET_PIXEL_FORMAT, &format as *const _ as *mut c_void);
     true
@@ -69,7 +68,8 @@ pub unsafe extern "C" fn retro_run() {
 
 #[no_mangle] 
 pub unsafe extern "C" fn retro_get_system_av_info(info: *mut c_void) {
-    let info = info as *mut libretro_sys::SystemAVInfo;
+    // Fixed: Changed capitalization from SystemAVInfo to SystemAvInfo
+    let info = info as *mut libretro_sys::SystemAvInfo;
     (*info).geometry.base_width = 256;
     (*info).geometry.base_height = 256;
     (*info).geometry.max_width = 256;
@@ -86,6 +86,9 @@ pub unsafe extern "C" fn retro_get_system_av_info(info: *mut c_void) {
 #[no_mangle] pub unsafe extern "C" fn retro_cheat_reset() {}
 #[no_mangle] pub unsafe extern "C" fn retro_cheat_set(_index: c_uint, _is_enabled: bool, _code: *const c_char) {}
 #[no_mangle] pub unsafe extern "C" fn retro_load_game_special(_game_type: c_uint, _info: *const c_void, _num_info: usize) -> bool { false }
-#[no_mangle] pub unsafe extern "C" fn retro_region() -> c_uint { libretro_sys::REGION_NTSC }
+
+// Fixed: Replaced missing REGION_NTSC constant with literal 0 (NTSC)
+#[no_mangle] pub unsafe extern "C" fn retro_region() -> c_uint { 0 }
+
 #[no_mangle] pub unsafe extern "C" fn retro_get_memory_data(_id: c_uint) -> *mut c_void { std::ptr::null_mut() }
 #[no_mangle] pub unsafe extern "C" fn retro_get_memory_size(_id: c_uint) -> usize { 0 }
