@@ -6,7 +6,6 @@
 # When Pyxel is not available, a mock renderer is used for verification.
 
 import importlib.util
-import struct
 
 # -- screen dimensions (must match retro_get_system_av_info) ------------------
 SCREEN_W = 128
