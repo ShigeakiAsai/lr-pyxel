@@ -3,23 +3,27 @@
 
 use std::ffi::CStr;
 use std::os::raw::{c_char, c_uint, c_void};
-use pyo3::prelude::*;
-use pyo3::types::PyModule;
 
-static mut VIDEO_CB:   Option<unsafe extern "C" fn(*const c_void, c_uint, c_uint, usize)>    = None;
-static mut INPUT_POLL: Option<unsafe extern "C" fn()>                                         = None;
-static mut INPUT_STATE:Option<unsafe extern "C" fn(c_uint, c_uint, c_uint, c_uint) -> i16>   = None;
-static mut ENVIRON_CB: Option<unsafe extern "C" fn(c_uint, *mut c_void) -> bool>              = None;
+use pyxel_core::{
+    colors, height, init as pyxel_init, screen, width,
+    KEY_A, KEY_DOWN, KEY_LEFT, KEY_RETURN, KEY_RIGHT, KEY_S, KEY_UP, KEY_X, KEY_Z,
+};
 
-// Screen dimensions — must match pyxel_bridge.SCREEN_W / SCREEN_H
-const SCREEN_W: usize = 128;
-const SCREEN_H: usize = 128;
+static mut VIDEO_CB:    Option<unsafe extern "C" fn(*const c_void, c_uint, c_uint, usize)>   = None;
+static mut INPUT_POLL:  Option<unsafe extern "C" fn()>                                        = None;
+static mut INPUT_STATE: Option<unsafe extern "C" fn(c_uint, c_uint, c_uint, c_uint) -> i16>  = None;
+static mut ENVIRON_CB:  Option<unsafe extern "C" fn(c_uint, *mut c_void) -> bool>             = None;
 
-// Fallback green frame shown before Pyxel initializes
-const COLOR_GREEN: u16 = 0x07E0;
+// Screen dimensions
+const SCREEN_W: u32 = 128;
+const SCREEN_H: u32 = 128;
+const FPS: u32      = 60;
 
-// Cached pyxel_bridge module handle
-static mut BRIDGE: Option<Py<PyModule>> = None;
+// Pre-built RGB565 palette LUT (256 entries)
+static mut PALETTE_RGB565: [u16; 256] = [0u16; 256];
+
+// True once pyxel::init() has succeeded
+static mut PYXEL_READY: bool = false;
 
 // ---------------------------------------------------------------------------
 // Environment / pixel format
@@ -31,7 +35,7 @@ pub unsafe extern "C" fn retro_set_environment(
 ) {
     ENVIRON_CB = Some(cb);
 
-    // Must be called first so RetroArch shows "Start Core" without content
+    // Tell RetroArch this core can run without content
     let mut supported: u8 = 1;
     cb(
         rust_libretro_sys::RETRO_ENVIRONMENT_SET_SUPPORT_NO_GAME,
@@ -86,21 +90,21 @@ pub unsafe extern "C" fn retro_set_input_state(
 pub unsafe extern "C" fn retro_get_system_info(info: *mut c_void) {
     let info = info as *mut rust_libretro_sys::retro_system_info;
     (*info).library_name     = b"Pyxel\0".as_ptr() as *const c_char;
-    (*info).library_version  = b"0.2.0\0".as_ptr() as *const c_char;
+    (*info).library_version  = b"0.3.0\0".as_ptr() as *const c_char;
     (*info).valid_extensions = b"py\0".as_ptr()    as *const c_char;
-    (*info).need_fullpath    = true;   // pass the .py file path as-is
+    (*info).need_fullpath    = true;
     (*info).block_extract    = false;
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn retro_get_system_av_info(info: *mut c_void) {
     let info = info as *mut rust_libretro_sys::retro_system_av_info;
-    (*info).geometry.base_width   = SCREEN_W as c_uint;
-    (*info).geometry.base_height  = SCREEN_H as c_uint;
-    (*info).geometry.max_width    = SCREEN_W as c_uint;
-    (*info).geometry.max_height   = SCREEN_H as c_uint;
+    (*info).geometry.base_width   = SCREEN_W;
+    (*info).geometry.base_height  = SCREEN_H;
+    (*info).geometry.max_width    = SCREEN_W;
+    (*info).geometry.max_height   = SCREEN_H;
     (*info).geometry.aspect_ratio = 1.0;
-    (*info).timing.fps            = 60.0;
+    (*info).timing.fps            = f64::from(FPS);
     (*info).timing.sample_rate    = 44100.0;
 }
 
@@ -110,28 +114,27 @@ pub unsafe extern "C" fn retro_get_system_av_info(info: *mut c_void) {
 
 #[no_mangle]
 pub unsafe extern "C" fn retro_init() {
-    pyo3::prepare_freethreaded_python();
-    Python::with_gil(|py| {
-        // Add the libretro core directory to sys.path so pyxel_bridge.py is found
-        let sys  = py.import_bound("sys").expect("failed to import sys");
-        let path = sys.getattr("path").unwrap();
-        let path = path.downcast_into::<pyo3::types::PyList>().unwrap();
-        // path.insert(0, "/usr/lib/libretro").unwrap();
-        path.insert(0, "/storage/cores").unwrap();
+    pyxel_init(
+        SCREEN_W,
+        SCREEN_H,
+        Some("lr-pyxel"),  // title (unused in headless mode)
+        Some(FPS),
+        None,              // quit_key
+        None,              // display_scale
+        None,              // capture_scale
+        None,              // capture_sec
+        Some(true),        // headless = true — no window, no GL context
+    );
 
-        match py.import_bound("pyxel_bridge") {
-            Ok(module) => match module.call_method0("init") {
-                Ok(_)  => { BRIDGE = Some(module.unbind()); }
-                Err(e) => { e.print(py); }
-            },
-            Err(e) => { e.print(py); }
-        }
-    });
+    // Build RGB565 palette LUT from Pyxel default palette
+    build_palette_lut();
+
+    PYXEL_READY = true;
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn retro_deinit() {
-    BRIDGE = None;
+    PYXEL_READY = false;
 }
 
 // ---------------------------------------------------------------------------
@@ -148,38 +151,21 @@ struct RetroGameInfo {
 
 #[no_mangle]
 pub unsafe extern "C" fn retro_load_game(game: *const c_void) -> bool {
-    // Allow content-less boot
+    // Content-less boot is allowed
     if game.is_null() {
         return true;
     }
-
     let info = &*(game as *const RetroGameInfo);
     if info.path.is_null() {
         return true;
     }
-
-    let path = CStr::from_ptr(info.path).to_string_lossy().into_owned();
-
-    if let Some(ref bridge) = BRIDGE {
-        Python::with_gil(|py| {
-            match bridge.bind(py).call_method1("load_game", (path,)) {
-                Ok(result) => result.extract::<bool>().unwrap_or(false),
-                Err(e)     => { e.print(py); false }
-            }
-        })
-    } else {
-        true // no bridge yet — content-less boot
-    }
+    // TODO: load and execute the .py game file
+    let _path = CStr::from_ptr(info.path).to_string_lossy();
+    true
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn retro_unload_game() {
-    if let Some(ref bridge) = BRIDGE {
-        Python::with_gil(|py| {
-            let _ = bridge.bind(py).call_method0("unload_game");
-        });
-    }
-}
+pub unsafe extern "C" fn retro_unload_game() {}
 
 // ---------------------------------------------------------------------------
 // Main loop
@@ -192,7 +178,7 @@ pub unsafe extern "C" fn retro_run() {
         poll();
     }
 
-    // 2. Collect button bitmask (16 joypad buttons)
+    // 2. Collect joypad bitmask
     let mut buttons: u32 = 0;
     if let Some(state) = INPUT_STATE {
         for bit in 0u32..16 {
@@ -202,55 +188,112 @@ pub unsafe extern "C" fn retro_run() {
         }
     }
 
-    // 3. Check SELECT (bit 2) for shutdown
+    // 3. SELECT (bit 2) → shutdown
     if buttons & (1 << 2) != 0 {
         if let Some(env) = ENVIRON_CB {
-            env(rust_libretro_sys::RETRO_ENVIRONMENT_SHUTDOWN, std::ptr::null_mut());
+            env(
+                rust_libretro_sys::RETRO_ENVIRONMENT_SHUTDOWN,
+                std::ptr::null_mut(),
+            );
         }
         return;
     }
 
-    // 4. Forward input and advance one frame via pyxel_bridge
-    let fb_bytes: Option<Vec<u8>> = if let Some(ref bridge) = BRIDGE {
-        Python::with_gil(|py| {
-            let b = bridge.bind(py);
-            let _ = b.call_method1("set_input", (buttons,));
-            let _ = b.call_method0("run_frame");
-            match b.call_method0("get_framebuffer") {
-                Ok(fb) => fb.extract::<Vec<u8>>().ok(),
-                Err(e) => { e.print(py); None }
-            }
-        })
-    } else {
-        None
-    };
+    if !PYXEL_READY {
+        submit_fallback_frame();
+        return;
+    }
 
-    // 5. Submit framebuffer to RetroArch
+    // 4. Inject input into Pyxel
+    inject_input(buttons);
+
+    // 5. Advance one Pyxel frame via flip_screen()
+    //    flip_screen() = draw_frame + step_frame + update_frame
+    pyxel_core::pyxel().flip_screen();
+
+    // 6. Convert screen buffer → RGB565 and submit to RetroArch
+    submit_pyxel_frame();
+}
+
+// ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
+
+unsafe fn build_palette_lut() {
+    let pal = colors();
+    for (i, &rgb24) in pal.iter().enumerate().take(256) {
+        let r = ((rgb24 >> 16) & 0xFF) as u16;
+        let g = ((rgb24 >>  8) & 0xFF) as u16;
+        let b = ( rgb24        & 0xFF) as u16;
+        PALETTE_RGB565[i] = ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
+    }
+}
+
+unsafe fn inject_input(buttons: u32) {
+    // Map libretro joypad bits to Pyxel Key enum
+    // bit 0  B      → Z
+    // bit 1  Y      → X
+    // bit 3  START  → Return
+    // bit 4  UP     → Up
+    // bit 5  DOWN   → Down
+    // bit 6  LEFT   → Left
+    // bit 7  RIGHT  → Right
+    // bit 8  A      → A
+    // bit 9  X      → S
+    const MAP: &[(u32, u32)] = &[
+        (0, KEY_Z),
+        (1, KEY_X),
+        (3, KEY_RETURN),
+        (4, KEY_UP),
+        (5, KEY_DOWN),
+        (6, KEY_LEFT),
+        (7, KEY_RIGHT),
+        (8, KEY_A),
+        (9, KEY_S),
+    ];
+    let px = pyxel_core::pyxel();
+    for &(bit, key) in MAP {
+        px.set_button_state(key, buttons & (1 << bit) != 0);
+    }
+}
+
+unsafe fn submit_pyxel_frame() {
+    let w = *width()  as usize;
+    let h = *height() as usize;
+    let pixels = w * h;
+
+    // Access the raw palette-index buffer
+    let screen_rc = screen();
+    let src: *const u8 = (*screen_rc.get()).data_ptr() as *const u8;
+
+    // Convert palette indices → RGB565
+    let mut fb = vec![0u16; pixels];
+    for i in 0..pixels {
+        let idx = *src.add(i) as usize;
+        fb[i] = PALETTE_RGB565[idx];
+    }
+
     if let Some(video) = VIDEO_CB {
-        match fb_bytes {
-            Some(ref fb) if fb.len() == SCREEN_W * SCREEN_H * 2 => {
-                video(
-                    fb.as_ptr() as *const c_void,
-                    SCREEN_W as c_uint,
-                    SCREEN_H as c_uint,
-                    SCREEN_W * 2,
-                );
-            }
-            _ => {
-                // Fallback: show solid green until bridge is ready
-                let fallback = vec![
-                    (COLOR_GREEN & 0xFF) as u8,
-                    ((COLOR_GREEN >> 8) & 0xFF) as u8,
-                ]
-                .repeat(SCREEN_W * SCREEN_H);
-                video(
-                    fallback.as_ptr() as *const c_void,
-                    SCREEN_W as c_uint,
-                    SCREEN_H as c_uint,
-                    SCREEN_W * 2,
-                );
-            }
-        }
+        video(
+            fb.as_ptr() as *const c_void,
+            w as c_uint,
+            h as c_uint,
+            w * 2, // pitch in bytes
+        );
+    }
+}
+
+unsafe fn submit_fallback_frame() {
+    // Solid green until Pyxel is ready
+    const GREEN: u16 = 0x07E0;
+    let fb = vec![GREEN; (SCREEN_W * SCREEN_H) as usize];
+    if let Some(video) = VIDEO_CB {
+        video(
+            fb.as_ptr() as *const c_void,
+            SCREEN_W,
+            SCREEN_H,
+            (SCREEN_W * 2) as usize,
+        );
     }
 }
 
@@ -259,14 +302,14 @@ pub unsafe extern "C" fn retro_run() {
 // ---------------------------------------------------------------------------
 
 #[no_mangle] pub unsafe extern "C" fn retro_reset() {}
-#[no_mangle] pub unsafe extern "C" fn retro_set_controller_port_device(_port: c_uint, _device: c_uint) {}
+#[no_mangle] pub unsafe extern "C" fn retro_set_controller_port_device(_p: c_uint, _d: c_uint) {}
 #[no_mangle] pub unsafe extern "C" fn retro_api_version() -> c_uint { rust_libretro_sys::RETRO_API_VERSION as c_uint }
 #[no_mangle] pub unsafe extern "C" fn retro_serialize_size() -> usize { 0 }
-#[no_mangle] pub unsafe extern "C" fn retro_serialize(_data: *mut c_void, _size: usize) -> bool { false }
-#[no_mangle] pub unsafe extern "C" fn retro_unserialize(_data: *const c_void, _size: usize) -> bool { false }
+#[no_mangle] pub unsafe extern "C" fn retro_serialize(_d: *mut c_void, _s: usize) -> bool { false }
+#[no_mangle] pub unsafe extern "C" fn retro_unserialize(_d: *const c_void, _s: usize) -> bool { false }
 #[no_mangle] pub unsafe extern "C" fn retro_cheat_reset() {}
-#[no_mangle] pub unsafe extern "C" fn retro_cheat_set(_index: c_uint, _is_enabled: bool, _code: *const c_char) {}
-#[no_mangle] pub unsafe extern "C" fn retro_load_game_special(_type: c_uint, _info: *const c_void, _num: usize) -> bool { false }
+#[no_mangle] pub unsafe extern "C" fn retro_cheat_set(_i: c_uint, _e: bool, _c: *const c_char) {}
+#[no_mangle] pub unsafe extern "C" fn retro_load_game_special(_t: c_uint, _i: *const c_void, _n: usize) -> bool { false }
 #[no_mangle] pub unsafe extern "C" fn retro_get_region() -> c_uint { 0 }
 #[no_mangle] pub unsafe extern "C" fn retro_get_memory_data(_id: c_uint) -> *mut c_void { std::ptr::null_mut() }
 #[no_mangle] pub unsafe extern "C" fn retro_get_memory_size(_id: c_uint) -> usize { 0 }
