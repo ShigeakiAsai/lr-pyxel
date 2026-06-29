@@ -207,11 +207,13 @@ pub unsafe extern "C" fn retro_run() {
     // 4. Inject input into Pyxel
     inject_input(buttons);
 
-    // 5. Advance one Pyxel frame via flip_screen()
-    //    flip_screen() = draw_frame + step_frame + update_frame
+    // 5. Fill screen with light blue (color 11) every frame
+    pyxel_core::pyxel().clear(11);
+
+    // 6. Advance one Pyxel frame via flip_screen()
     pyxel_core::pyxel().flip_screen();
 
-    // 6. Convert screen buffer → RGB565 and submit to RetroArch
+    // 7. Convert screen buffer → RGB565 and submit to RetroArch
     submit_pyxel_frame();
 }
 
@@ -230,7 +232,7 @@ unsafe fn build_palette_lut() {
 }
 
 unsafe fn inject_input(buttons: u32) {
-    // Map libretro joypad bits to Pyxel Key enum
+    // Map libretro joypad bits to Pyxel KEY_* constants
     // bit 0  B      → Z
     // bit 1  Y      → X
     // bit 3  START  → Return
