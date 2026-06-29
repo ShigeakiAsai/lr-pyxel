@@ -1,6 +1,6 @@
 [package]
 name = "lr-pyxel"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 
 [lib]
@@ -8,4 +8,5 @@ crate-type = ["cdylib"]
 
 [dependencies]
 rust-libretro-sys = "0.3.2"
+pyo3 = { version = "0.21", features = ["auto-initialize"] }
 pyxel-core = { git = "https://github.com/kitao/pyxel.git", tag = "@PYXEL_TAG@", package = "pyxel-core", features = ["sdl2_static"] }
