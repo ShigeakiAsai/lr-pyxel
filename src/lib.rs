@@ -4,6 +4,9 @@
 use std::ffi::CStr;
 use std::os::raw::{c_char, c_uint, c_void};
 
+use pyo3::prelude::*;
+use pyo3::types::PyModule;
+
 use pyxel_core::{
     colors, height, init as pyxel_init, screen, width,
     KEY_A, KEY_DOWN, KEY_LEFT, KEY_RETURN, KEY_RIGHT, KEY_S, KEY_UP, KEY_X, KEY_Z,
@@ -22,8 +25,125 @@ const FPS: u32      = 60;
 // Pre-built RGB565 palette LUT (256 entries)
 static mut PALETTE_RGB565: [u16; 256] = [0u16; 256];
 
-// True once pyxel::init() has succeeded
+// True once pyxel_init() has succeeded
 static mut PYXEL_READY: bool = false;
+
+// Cached Python game callbacks
+static mut PY_UPDATE: Option<Py<PyAny>> = None;
+static mut PY_DRAW:   Option<Py<PyAny>> = None;
+
+// ---------------------------------------------------------------------------
+// Pyxel Python module — v0.4.0 minimal set
+// ---------------------------------------------------------------------------
+
+// -- drawing -----------------------------------------------------------------
+
+#[pyfunction]
+fn cls(color: u8) {
+    unsafe {
+        if PYXEL_READY {
+            pyxel_core::pyxel().clear(color);
+        }
+    }
+}
+
+#[pyfunction]
+fn rect(x: f32, y: f32, w: f32, h: f32, color: u8) {
+    unsafe {
+        if PYXEL_READY {
+            pyxel_core::pyxel().draw_rect(x, y, w, h, color);
+        }
+    }
+}
+
+#[pyfunction]
+fn text(x: f32, y: f32, s: &str, color: u8) {
+    unsafe {
+        if PYXEL_READY {
+            pyxel_core::pyxel().draw_text(x, y, s, color, None);
+        }
+    }
+}
+
+// -- input -------------------------------------------------------------------
+
+#[pyfunction]
+fn btn(key: u32) -> bool {
+    unsafe {
+        if PYXEL_READY {
+            pyxel_core::pyxel().is_button_down(key)
+        } else {
+            false
+        }
+    }
+}
+
+#[pyfunction]
+fn btnp(key: u32, hold: Option<u32>, repeat: Option<u32>) -> bool {
+    unsafe {
+        if PYXEL_READY {
+            pyxel_core::pyxel().is_button_pressed(key, hold, repeat)
+        } else {
+            false
+        }
+    }
+}
+
+// -- system ------------------------------------------------------------------
+
+#[pyfunction]
+fn frame_count() -> u32 {
+    unsafe { *pyxel_core::frame_count() }
+}
+
+// init() is a no-op: Pyxel is already initialized by retro_init()
+#[pyfunction]
+#[pyo3(signature = (w, h, title=None, fps=None, quit_key=None,
+                    display_scale=None, capture_scale=None,
+                    capture_sec=None))]
+fn init(
+    w: u32, h: u32,
+    title: Option<&str>, fps: Option<u32>, quit_key: Option<u32>,
+    display_scale: Option<u32>, capture_scale: Option<u32>, capture_sec: Option<u32>,
+) {
+    let _ = (w, h, title, fps, quit_key, display_scale, capture_scale, capture_sec);
+}
+
+// run() is a no-op: frame loop is driven by retro_run()
+#[pyfunction]
+fn run(_update: PyObject, _draw: PyObject) {}
+
+// -- key constants -----------------------------------------------------------
+
+fn add_key_constants(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add("KEY_UP",     pyxel_core::KEY_UP)?;
+    m.add("KEY_DOWN",   pyxel_core::KEY_DOWN)?;
+    m.add("KEY_LEFT",   pyxel_core::KEY_LEFT)?;
+    m.add("KEY_RIGHT",  pyxel_core::KEY_RIGHT)?;
+    m.add("KEY_Z",      pyxel_core::KEY_Z)?;
+    m.add("KEY_X",      pyxel_core::KEY_X)?;
+    m.add("KEY_A",      pyxel_core::KEY_A)?;
+    m.add("KEY_S",      pyxel_core::KEY_S)?;
+    m.add("KEY_RETURN", pyxel_core::KEY_RETURN)?;
+    m.add("KEY_ESCAPE", pyxel_core::KEY_ESCAPE)?;
+    Ok(())
+}
+
+// -- module registration -----------------------------------------------------
+
+#[pymodule]
+fn pyxel_module(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(cls,         m)?)?;
+    m.add_function(wrap_pyfunction!(rect,        m)?)?;
+    m.add_function(wrap_pyfunction!(text,        m)?)?;
+    m.add_function(wrap_pyfunction!(btn,         m)?)?;
+    m.add_function(wrap_pyfunction!(btnp,        m)?)?;
+    m.add_function(wrap_pyfunction!(frame_count, m)?)?;
+    m.add_function(wrap_pyfunction!(init,        m)?)?;
+    m.add_function(wrap_pyfunction!(run,         m)?)?;
+    add_key_constants(m)?;
+    Ok(())
+}
 
 // ---------------------------------------------------------------------------
 // Environment / pixel format
@@ -35,7 +155,6 @@ pub unsafe extern "C" fn retro_set_environment(
 ) {
     ENVIRON_CB = Some(cb);
 
-    // Tell RetroArch this core can run without content
     let mut supported: u8 = 1;
     cb(
         rust_libretro_sys::RETRO_ENVIRONMENT_SET_SUPPORT_NO_GAME,
@@ -90,7 +209,7 @@ pub unsafe extern "C" fn retro_set_input_state(
 pub unsafe extern "C" fn retro_get_system_info(info: *mut c_void) {
     let info = info as *mut rust_libretro_sys::retro_system_info;
     (*info).library_name     = b"Pyxel\0".as_ptr() as *const c_char;
-    (*info).library_version  = b"0.3.0\0".as_ptr() as *const c_char;
+    (*info).library_version  = b"0.4.0\0".as_ptr() as *const c_char;
     (*info).valid_extensions = b"py\0".as_ptr()    as *const c_char;
     (*info).need_fullpath    = true;
     (*info).block_extract    = false;
@@ -114,26 +233,29 @@ pub unsafe extern "C" fn retro_get_system_av_info(info: *mut c_void) {
 
 #[no_mangle]
 pub unsafe extern "C" fn retro_init() {
+    // Register "pyxel" built-in module BEFORE Py_Initialize
+    append_to_inittab!(pyxel_module);
+
+    // Initialize Pyxel engine in headless mode
     pyxel_init(
-        SCREEN_W,
-        SCREEN_H,
-        Some("lr-pyxel"),  // title (unused in headless mode)
+        SCREEN_W, SCREEN_H,
+        Some("lr-pyxel"),
         Some(FPS),
-        None,              // quit_key
-        None,              // display_scale
-        None,              // capture_scale
-        None,              // capture_sec
-        Some(true),        // headless = true — no window, no GL context
+        None, None, None, None,
+        Some(true),        // headless = true
     );
 
-    // Build RGB565 palette LUT from Pyxel default palette
     build_palette_lut();
-
     PYXEL_READY = true;
+
+    // Start Python interpreter (after append_to_inittab)
+    pyo3::prepare_freethreaded_python();
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn retro_deinit() {
+    PY_UPDATE   = None;
+    PY_DRAW     = None;
     PYXEL_READY = false;
 }
 
@@ -151,21 +273,53 @@ struct RetroGameInfo {
 
 #[no_mangle]
 pub unsafe extern "C" fn retro_load_game(game: *const c_void) -> bool {
-    // Content-less boot is allowed
     if game.is_null() {
-        return true;
+        return true; // content-less boot
     }
     let info = &*(game as *const RetroGameInfo);
     if info.path.is_null() {
         return true;
     }
-    // TODO: load and execute the .py game file
-    let _path = CStr::from_ptr(info.path).to_string_lossy();
-    true
+
+    let path = CStr::from_ptr(info.path).to_string_lossy().into_owned();
+
+    Python::with_gil(|py| {
+        // Add game directory to sys.path
+        let sys     = py.import_bound("sys").expect("failed to import sys");
+        let syspath = sys.getattr("path").unwrap();
+        let syspath = syspath.downcast_into::<pyo3::types::PyList>().unwrap();
+        let game_dir = std::path::Path::new(&path)
+            .parent()
+            .unwrap_or(std::path::Path::new("."))
+            .to_string_lossy()
+            .into_owned();
+        syspath.insert(0, game_dir).unwrap();
+
+        // Execute the game script
+        let code    = std::fs::read_to_string(&path).unwrap_or_default();
+        let globals = pyo3::types::PyDict::new_bound(py);
+
+        match py.run_bound(&code, Some(&globals), None) {
+            Ok(_) => {
+                // Cache update() and draw() if defined at module level
+                PY_UPDATE = globals.get_item("update").ok()
+                    .flatten()
+                    .map(|f| f.into_py(py));
+                PY_DRAW = globals.get_item("draw").ok()
+                    .flatten()
+                    .map(|f| f.into_py(py));
+                true
+            }
+            Err(e) => { e.print(py); false }
+        }
+    })
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn retro_unload_game() {}
+pub unsafe extern "C" fn retro_unload_game() {
+    PY_UPDATE = None;
+    PY_DRAW   = None;
+}
 
 // ---------------------------------------------------------------------------
 // Main loop
@@ -191,10 +345,7 @@ pub unsafe extern "C" fn retro_run() {
     // 3. SELECT (bit 2) → shutdown
     if buttons & (1 << 2) != 0 {
         if let Some(env) = ENVIRON_CB {
-            env(
-                rust_libretro_sys::RETRO_ENVIRONMENT_SHUTDOWN,
-                std::ptr::null_mut(),
-            );
+            env(rust_libretro_sys::RETRO_ENVIRONMENT_SHUTDOWN, std::ptr::null_mut());
         }
         return;
     }
@@ -207,13 +358,25 @@ pub unsafe extern "C" fn retro_run() {
     // 4. Inject input into Pyxel
     inject_input(buttons);
 
-    // 5. Fill screen with light blue (color 11) every frame
-    pyxel_core::pyxel().clear(11);
+    // 5. Call Python game callbacks if loaded, otherwise show placeholder
+    if PY_UPDATE.is_some() || PY_DRAW.is_some() {
+        Python::with_gil(|py| {
+            if let Some(ref update) = PY_UPDATE {
+                if let Err(e) = update.call0(py) { e.print(py); }
+            }
+            if let Some(ref draw) = PY_DRAW {
+                if let Err(e) = draw.call0(py) { e.print(py); }
+            }
+        });
+    } else {
+        // No game loaded — light blue placeholder
+        pyxel_core::pyxel().clear(11);
+    }
 
-    // 6. Advance one Pyxel frame via flip_screen()
+    // 6. Advance one Pyxel frame
     pyxel_core::pyxel().flip_screen();
 
-    // 7. Convert screen buffer → RGB565 and submit to RetroArch
+    // 7. Submit framebuffer to RetroArch
     submit_pyxel_frame();
 }
 
@@ -232,16 +395,6 @@ unsafe fn build_palette_lut() {
 }
 
 unsafe fn inject_input(buttons: u32) {
-    // Map libretro joypad bits to Pyxel KEY_* constants
-    // bit 0  B      → Z
-    // bit 1  Y      → X
-    // bit 3  START  → Return
-    // bit 4  UP     → Up
-    // bit 5  DOWN   → Down
-    // bit 6  LEFT   → Left
-    // bit 7  RIGHT  → Right
-    // bit 8  A      → A
-    // bit 9  X      → S
     const MAP: &[(u32, u32)] = &[
         (0, KEY_Z),
         (1, KEY_X),
@@ -264,38 +417,24 @@ unsafe fn submit_pyxel_frame() {
     let h = *height() as usize;
     let pixels = w * h;
 
-    // Access the raw palette-index buffer
     let screen_rc = screen();
     let src: *const u8 = (*screen_rc.get()).data_ptr() as *const u8;
 
-    // Convert palette indices → RGB565
     let mut fb = vec![0u16; pixels];
     for i in 0..pixels {
-        let idx = *src.add(i) as usize;
-        fb[i] = PALETTE_RGB565[idx];
+        fb[i] = PALETTE_RGB565[*src.add(i) as usize];
     }
 
     if let Some(video) = VIDEO_CB {
-        video(
-            fb.as_ptr() as *const c_void,
-            w as c_uint,
-            h as c_uint,
-            w * 2, // pitch in bytes
-        );
+        video(fb.as_ptr() as *const c_void, w as c_uint, h as c_uint, w * 2);
     }
 }
 
 unsafe fn submit_fallback_frame() {
-    // Solid green until Pyxel is ready
     const GREEN: u16 = 0x07E0;
     let fb = vec![GREEN; (SCREEN_W * SCREEN_H) as usize];
     if let Some(video) = VIDEO_CB {
-        video(
-            fb.as_ptr() as *const c_void,
-            SCREEN_W,
-            SCREEN_H,
-            (SCREEN_W * 2) as usize,
-        );
+        video(fb.as_ptr() as *const c_void, SCREEN_W, SCREEN_H, (SCREEN_W * 2) as usize);
     }
 }
 
