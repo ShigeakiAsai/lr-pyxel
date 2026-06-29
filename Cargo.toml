@@ -9,3 +9,4 @@ crate-type = ["cdylib"]
 [dependencies]
 rust-libretro-sys = "0.3.2"
 pyo3 = { version = "0.21" }
+pyxel = { version = "2.9.6", features = ["sdl2_static"] }
