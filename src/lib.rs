@@ -125,6 +125,28 @@ fn image_load(bank: usize, path: &str, x: i32, y: i32, include_colors: bool) -> 
     }
 }
 
+// image_pset(bank, x, y, color)
+// Sets a single pixel directly inside image bank `bank`, without going
+// through the screen. Useful for hand-drawing a tiny sprite at runtime
+// (e.g. for the blt() smoke test) without needing an external PNG.
+#[pyfunction]
+fn image_pset(bank: usize, x: f32, y: f32, color: u8) -> PyResult<()> {
+    unsafe {
+        if !PYXEL_READY {
+            return Ok(());
+        }
+        let imgs = pyxel_core::images();
+        let Some(rc_image) = imgs.get(bank) else {
+            return Err(pyo3::exceptions::PyIndexError::new_err(format!(
+                "image bank {bank} does not exist"
+            )));
+        };
+        let image: &mut pyxel_core::Image = &mut *rc_image.get();
+        image.set_pixel(x, y, color);
+        Ok(())
+    }
+}
+
 // -- input -------------------------------------------------------------------
 
 #[pyfunction]
@@ -200,6 +222,7 @@ fn pyxel(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(pget,        m)?)?;
     m.add_function(wrap_pyfunction!(blt,         m)?)?;
     m.add_function(wrap_pyfunction!(image_load,  m)?)?;
+    m.add_function(wrap_pyfunction!(image_pset,  m)?)?;
     m.add_function(wrap_pyfunction!(btn,         m)?)?;
     m.add_function(wrap_pyfunction!(btnp,        m)?)?;
     m.add_function(wrap_pyfunction!(frame_count, m)?)?;
