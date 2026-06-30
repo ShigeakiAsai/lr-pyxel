@@ -133,7 +133,7 @@ fn add_key_constants(m: &Bound<'_, PyModule>) -> PyResult<()> {
 // -- module registration -----------------------------------------------------
 
 #[pymodule]
-fn pyxel_module(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn pyxel(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(cls,         m)?)?;
     m.add_function(wrap_pyfunction!(rect,        m)?)?;
     m.add_function(wrap_pyfunction!(text,        m)?)?;
@@ -235,7 +235,7 @@ pub unsafe extern "C" fn retro_get_system_av_info(info: *mut c_void) {
 #[no_mangle]
 pub unsafe extern "C" fn retro_init() {
     // Register "pyxel" built-in module BEFORE Py_Initialize
-    append_to_inittab!(pyxel_module);
+    append_to_inittab!(pyxel);
 
     // Initialize Pyxel engine in headless mode
     pyxel_init(
