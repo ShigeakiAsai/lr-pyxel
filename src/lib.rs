@@ -147,6 +147,68 @@ fn image_pset(bank: usize, x: f32, y: f32, color: u8) -> PyResult<()> {
     }
 }
 
+// -- sound -------------------------------------------------------------------
+
+// sound_set(no, notes, tones, volumes, effects, speed)
+// Writes MML-style note/tone/volume/effect strings into sound bank `no`,
+// mirroring pyxel_core::Sound::set(). Must be called once (e.g. at module
+// load time) before play()/play_sound() can use that bank.
+#[pyfunction]
+fn sound_set(
+    no: usize,
+    notes: &str,
+    tones: &str,
+    volumes: &str,
+    effects: &str,
+    speed: u16,
+) -> PyResult<()> {
+    unsafe {
+        if !PYXEL_READY {
+            return Ok(());
+        }
+        let snds = pyxel_core::sounds();
+        let Some(rc_sound) = snds.get(no) else {
+            return Err(pyo3::exceptions::PyIndexError::new_err(format!(
+                "sound bank {no} does not exist"
+            )));
+        };
+        let sound: &mut pyxel_core::Sound = &mut *rc_sound.get();
+        sound
+            .set(notes, tones, volumes, effects, speed)
+            .map_err(pyo3::exceptions::PyValueError::new_err)
+    }
+}
+
+// play(ch, snd, loop=False)
+// Plays sound bank `snd` once (or looped) on channel `ch`. This is the
+// thin wrapper matching pyxel's public Python signature; start_sec and
+// should_resume are fixed to sensible defaults (start from 0.0, no resume).
+#[pyfunction]
+#[pyo3(signature = (ch, snd, r#loop=false))]
+fn play(ch: u32, snd: u32, r#loop: bool) {
+    unsafe {
+        if PYXEL_READY {
+            pyxel_core::pyxel().play_sound(ch, snd, Some(0.0), r#loop, false);
+        }
+    }
+}
+
+// stop(ch=None)
+// Stops playback on a single channel, or all channels if ch is omitted.
+#[pyfunction]
+#[pyo3(signature = (ch=None))]
+fn stop(ch: Option<u32>) {
+    unsafe {
+        if !PYXEL_READY {
+            return;
+        }
+        match ch {
+            Some(c) => pyxel_core::pyxel().stop_channel(c),
+            None => pyxel_core::pyxel().stop_all_channels(),
+        }
+    }
+}
+
 // -- input -------------------------------------------------------------------
 
 #[pyfunction]
@@ -223,6 +285,9 @@ fn pyxel(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(blt,         m)?)?;
     m.add_function(wrap_pyfunction!(image_load,  m)?)?;
     m.add_function(wrap_pyfunction!(image_pset,  m)?)?;
+    m.add_function(wrap_pyfunction!(sound_set,   m)?)?;
+    m.add_function(wrap_pyfunction!(play,        m)?)?;
+    m.add_function(wrap_pyfunction!(stop,        m)?)?;
     m.add_function(wrap_pyfunction!(btn,         m)?)?;
     m.add_function(wrap_pyfunction!(btnp,        m)?)?;
     m.add_function(wrap_pyfunction!(frame_count, m)?)?;
@@ -311,7 +376,12 @@ pub unsafe extern "C" fn retro_get_system_av_info(info: *mut c_void) {
     (*info).geometry.max_height   = SCREEN_H;
     (*info).geometry.aspect_ratio = 1.0;
     (*info).timing.fps            = f64::from(FPS);
-    (*info).timing.sample_rate    = 44100.0;
+    // NOTE: this declares the rate libretro expects from audio_batch_cb.
+    // We are not yet feeding that callback (Pyxel/SDL2 currently renders
+    // audio directly to ALSA in headless mode, bypassing libretro's audio
+    // pipeline) — see CHANGELOG notes for v0.4.1 sound support.
+    // Pyxel's internal mixer runs at AUDIO_SAMPLE_RATE = 22050 Hz.
+    (*info).timing.sample_rate    = 22050.0;
 }
 
 // ---------------------------------------------------------------------------
