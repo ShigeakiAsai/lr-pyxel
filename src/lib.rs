@@ -623,3 +623,15 @@ unsafe fn submit_fallback_frame() {
 #[no_mangle] pub unsafe extern "C" fn retro_get_region() -> c_uint { 0 }
 #[no_mangle] pub unsafe extern "C" fn retro_get_memory_data(_id: c_uint) -> *mut c_void { std::ptr::null_mut() }
 #[no_mangle] pub unsafe extern "C" fn retro_get_memory_size(_id: c_uint) -> usize { 0 }
+
+// --- TEMPORARY: API existence probe for Audio::render_samples (delete after check) ---
+#[allow(dead_code)]
+fn _probe_audio_api() {
+    unsafe {
+        let channels = pyxel_core::channels();
+        let mut blip_buf = blip_buf::BlipBuf::new(1024);
+        blip_buf.set_rates(1_789_773.0, 22050.0);
+        let mut out = [0i16; 368];
+        pyxel_core::Audio::render_samples(channels, &mut blip_buf, &mut out);
+    }
+}
