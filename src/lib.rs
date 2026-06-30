@@ -66,6 +66,65 @@ fn text(x: f32, y: f32, s: &str, color: u8) {
     }
 }
 
+#[pyfunction]
+fn pset(x: f32, y: f32, color: u8) {
+    unsafe {
+        if PYXEL_READY {
+            pyxel_core::pyxel().set_pixel(x, y, color);
+        }
+    }
+}
+
+#[pyfunction]
+fn pget(x: f32, y: f32) -> u8 {
+    unsafe {
+        if PYXEL_READY {
+            pyxel_core::pyxel().pixel(x, y)
+        } else {
+            0
+        }
+    }
+}
+
+// blt(x, y, img, u, v, w, h, colkey=None)
+// Draws a width x height region starting at (u, v) of image bank `img`
+// onto the screen at (x, y). `colkey` marks a transparent color index.
+#[pyfunction]
+#[pyo3(signature = (x, y, img, u, v, w, h, colkey=None))]
+#[allow(clippy::too_many_arguments)]
+fn blt(x: f32, y: f32, img: u32, u: f32, v: f32, w: f32, h: f32, colkey: Option<u8>) {
+    unsafe {
+        if PYXEL_READY {
+            pyxel_core::pyxel().draw_image(x, y, img, u, v, w, h, colkey, None, None);
+        }
+    }
+}
+
+// image_load(bank, path, x=0, y=0, include_colors=False)
+// Loads a PNG file into image bank `bank` at offset (x, y).
+// Mirrors pyxel_core::Image::load(); the bank index must already exist
+// (Pyxel pre-allocates NUM_IMAGES banks at init time).
+#[pyfunction]
+#[pyo3(signature = (bank, path, x=0, y=0, include_colors=false))]
+fn image_load(bank: usize, path: &str, x: i32, y: i32, include_colors: bool) -> PyResult<()> {
+    unsafe {
+        if !PYXEL_READY {
+            return Ok(());
+        }
+        let imgs = pyxel_core::images();
+        let Some(rc_image) = imgs.get(bank) else {
+            return Err(pyo3::exceptions::PyIndexError::new_err(format!(
+                "image bank {bank} does not exist"
+            )));
+        };
+        // RcImage = Rc<UnsafeCell<Image>>; get a mutable reference via the cell
+        let image: &mut pyxel_core::Image = &mut *rc_image.get();
+        image
+            .load(x, y, path, Some(include_colors))
+            .map_err(pyo3::exceptions::PyOSError::new_err)
+    }
+}
+
 // -- input -------------------------------------------------------------------
 
 #[pyfunction]
@@ -137,6 +196,10 @@ fn pyxel(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(cls,         m)?)?;
     m.add_function(wrap_pyfunction!(rect,        m)?)?;
     m.add_function(wrap_pyfunction!(text,        m)?)?;
+    m.add_function(wrap_pyfunction!(pset,        m)?)?;
+    m.add_function(wrap_pyfunction!(pget,        m)?)?;
+    m.add_function(wrap_pyfunction!(blt,         m)?)?;
+    m.add_function(wrap_pyfunction!(image_load,  m)?)?;
     m.add_function(wrap_pyfunction!(btn,         m)?)?;
     m.add_function(wrap_pyfunction!(btnp,        m)?)?;
     m.add_function(wrap_pyfunction!(frame_count, m)?)?;
@@ -210,7 +273,7 @@ pub unsafe extern "C" fn retro_set_input_state(
 pub unsafe extern "C" fn retro_get_system_info(info: *mut c_void) {
     let info = info as *mut rust_libretro_sys::retro_system_info;
     (*info).library_name     = b"Pyxel\0".as_ptr() as *const c_char;
-    (*info).library_version  = b"0.4.0\0".as_ptr() as *const c_char;
+    (*info).library_version  = b"0.4.1\0".as_ptr() as *const c_char;
     (*info).valid_extensions = b"py\0".as_ptr()    as *const c_char;
     (*info).need_fullpath    = true;
     (*info).block_extract    = false;
