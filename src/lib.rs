@@ -5,6 +5,7 @@ use std::ffi::CStr;
 use std::os::raw::{c_char, c_uint, c_void};
 
 use pyo3::prelude::*;
+use pyo3::append_to_inittab;
 use pyo3::types::PyModule;
 
 use pyxel_core::{
@@ -93,7 +94,7 @@ fn btnp(key: u32, hold: Option<u32>, repeat: Option<u32>) -> bool {
 
 #[pyfunction]
 fn frame_count() -> u32 {
-    unsafe { *pyxel_core::frame_count() }
+    *pyxel_core::frame_count()
 }
 
 // init() is a no-op: Pyxel is already initialized by retro_init()
@@ -308,11 +309,23 @@ pub unsafe extern "C" fn retro_load_game(game: *const c_void) -> bool {
                 PY_DRAW = globals.get_item("draw").ok()
                     .flatten()
                     .map(|f| f.into_py(py));
-                true
             }
-            Err(e) => { e.print(py); false }
+            Err(e) => {
+                // Print the error but still return true: RetroArch already
+                // committed to loading this core's content (need_fullpath=true
+                // skipped its own file read), so returning false here only
+                // produces a generic "Failed to load content" with no detail.
+                // Printing here gives the real Python traceback in the log.
+                e.print(py);
+            }
         }
-    })
+    });
+
+    // Always report success once we've reached this point: the .py file
+    // existed and was readable. Script errors are surfaced via e.print(py)
+    // above and result in PY_UPDATE/PY_DRAW staying None, which falls back
+    // to the placeholder screen in retro_run().
+    true
 }
 
 #[no_mangle]
