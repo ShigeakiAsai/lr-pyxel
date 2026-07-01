@@ -413,9 +413,9 @@ fn quit() {
     }
 }
 #[pyfunction]
-fn width_fn() -> u32 { unsafe { *pyxel_core::width() } }
+fn width_fn() -> u32 { *pyxel_core::width() }
 #[pyfunction]
-fn height_fn() -> u32 { unsafe { *pyxel_core::height() } }
+fn height_fn() -> u32 { *pyxel_core::height() }
 
 // -- module registration -----------------------------------------------------
 
@@ -475,8 +475,8 @@ fn pyxel(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(init,        m)?)?;
     m.add_function(wrap_pyfunction!(run,         m)?)?;
     // width/height as module attributes
-    m.add("width",  unsafe { *pyxel_core::width() })?;
-    m.add("height", unsafe { *pyxel_core::height() })?;
+    m.add("width",  *pyxel_core::width())?;
+    m.add("height", *pyxel_core::height())?;
     add_key_constants(m)?;
     Ok(())
 }
@@ -726,7 +726,7 @@ pub unsafe extern "C" fn retro_run() {
     inject_input(buttons);
 
     // 5. Call Python game callbacks if loaded, otherwise show placeholder
-    if PY_UPDATE.is_some() || PY_DRAW.is_some() {
+    if unsafe { PY_UPDATE.is_some() || PY_DRAW.is_some() } {
         Python::with_gil(|py| {
             if let Some(ref update) = PY_UPDATE {
                 if let Err(e) = update.call0(py) { e.print(py); }
