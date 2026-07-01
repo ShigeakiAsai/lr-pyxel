@@ -723,10 +723,7 @@ pub unsafe extern "C" fn retro_run() {
         return;
     }
 
-    // 4. Inject input into Pyxel
-    inject_input(buttons);
-
-    // 5. Call Python game callbacks if loaded, otherwise show placeholder
+    // 4. Call Python game callbacks if loaded, otherwise show placeholder
     if unsafe { PY_UPDATE.is_some() || PY_DRAW.is_some() } {
         Python::with_gil(|py| {
             if let Some(ref update) = PY_UPDATE {
@@ -741,8 +738,14 @@ pub unsafe extern "C" fn retro_run() {
         pyxel_core::pyxel().clear(11);
     }
 
-    // 6. Advance one Pyxel frame
+    // 5. Advance one Pyxel frame.
+    //    flip_screen() calls start_input_frame() internally, resetting all key
+    //    states. inject_input() must come AFTER this so the fresh input is
+    //    registered in the new frame — preventing btnp() from firing every frame.
     pyxel_core::pyxel().flip_screen();
+
+    // 6. Inject input AFTER flip_screen() so btnp() sees a single press
+    inject_input(buttons);
 
     // 7. Submit framebuffer to RetroArch
     submit_pyxel_frame();
