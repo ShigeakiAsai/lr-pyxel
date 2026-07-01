@@ -636,22 +636,10 @@ pub unsafe extern "C" fn retro_load_game(game: *const c_void) -> bool {
         return true;
     }
 
-    // Reset previous game state before loading new content
-    PY_UPDATE = None;
-    PY_DRAW   = None;
-
-    // Reset Pyxel screen and input state for clean second load
-    if PYXEL_READY {
-        pyxel_core::pyxel().clear(0);
-        pyxel_core::pyxel().reset_clip_rect();
-        pyxel_core::pyxel().reset_camera();
-        pyxel_core::pyxel().reset_color_map();
-    }
-
     let path = CStr::from_ptr(info.path).to_string_lossy().into_owned();
 
     Python::with_gil(|py| {
-        // Add game directory to sys.path (avoid duplicates)
+        // Add game directory to sys.path
         let sys     = py.import_bound("sys").expect("failed to import sys");
         let syspath = sys.getattr("path").unwrap();
         let syspath = syspath.downcast_into::<pyo3::types::PyList>().unwrap();
@@ -660,13 +648,7 @@ pub unsafe extern "C" fn retro_load_game(game: *const c_void) -> bool {
             .unwrap_or(std::path::Path::new("."))
             .to_string_lossy()
             .into_owned();
-        // Only insert if not already present
-        let already_in_path = syspath.iter().any(|p| {
-            p.extract::<String>().map(|s| s == game_dir).unwrap_or(false)
-        });
-        if !already_in_path {
-            syspath.insert(0, game_dir).unwrap();
-        }
+        syspath.insert(0, game_dir).unwrap();
 
         // Execute the game script
         let code    = std::fs::read_to_string(&path).unwrap_or_default();
@@ -744,7 +726,8 @@ pub unsafe extern "C" fn retro_run() {
     inject_input(buttons);
 
     // 5. Call Python game callbacks if loaded, otherwise show placeholder
-    if unsafe { PY_UPDATE.is_some() || PY_DRAW.is_some() } {
+    let has_game = unsafe { std::ptr::read(std::ptr::addr_of!(PY_UPDATE)).is_some() || std::ptr::read(std::ptr::addr_of!(PY_DRAW)).is_some() };
+    if has_game {
         Python::with_gil(|py| {
             if let Some(ref update) = PY_UPDATE {
                 if let Err(e) = update.call0(py) { e.print(py); }
