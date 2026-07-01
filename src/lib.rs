@@ -33,6 +33,15 @@ static mut PYXEL_READY: bool = false;
 static mut PY_UPDATE: Option<Py<PyAny>> = None;
 static mut PY_DRAW:   Option<Py<PyAny>> = None;
 
+// Audio batch callback (libretro stereo PCM output)
+static mut AUDIO_BATCH_CB: Option<unsafe extern "C" fn(*const i16, usize) -> usize> = None;
+
+// BlipBuf for Pyxel audio rendering (22050 Hz, NTSC clock)
+static mut BLIP_BUF: Option<blip_buf::BlipBuf> = None;
+
+// Samples per frame at 22050 Hz / 60 fps (ceil)
+const AUDIO_SAMPLES_PER_FRAME: usize = 368;
+
 // ---------------------------------------------------------------------------
 // Pyxel Python module — v0.4.0 minimal set
 // ---------------------------------------------------------------------------
@@ -336,8 +345,9 @@ pub unsafe extern "C" fn retro_set_audio_sample(_cb: unsafe extern "C" fn(i16, i
 
 #[no_mangle]
 pub unsafe extern "C" fn retro_set_audio_sample_batch(
-    _cb: unsafe extern "C" fn(*const i16, usize) -> usize,
+    cb: unsafe extern "C" fn(*const i16, usize) -> usize,
 ) -> usize {
+    AUDIO_BATCH_CB = Some(cb);
     0
 }
 
@@ -393,6 +403,10 @@ pub unsafe extern "C" fn retro_init() {
     // Register "pyxel" built-in module BEFORE Py_Initialize
     append_to_inittab!(pyxel);
 
+    // Prevent SDL2 from grabbing the ALSA device directly.
+    // Audio is routed through libretro's audio_batch_cb instead.
+    std::env::set_var("SDL_AUDIODRIVER", "dummy");
+
     // Initialize Pyxel engine in headless mode
     pyxel_init(
         SCREEN_W, SCREEN_H,
@@ -401,6 +415,14 @@ pub unsafe extern "C" fn retro_init() {
         None, None, None, None,
         Some(true),        // headless = true
     );
+
+    // Initialize BlipBuf for audio rendering
+    let mut blip = blip_buf::BlipBuf::new(AUDIO_SAMPLES_PER_FRAME as u32 * 2);
+    blip.set_rates(
+        pyxel_core::AUDIO_CLOCK_RATE as f64,
+        pyxel_core::AUDIO_SAMPLE_RATE as f64,
+    );
+    BLIP_BUF = Some(blip);
 
     build_palette_lut();
     PYXEL_READY = true;
@@ -413,6 +435,7 @@ pub unsafe extern "C" fn retro_init() {
 pub unsafe extern "C" fn retro_deinit() {
     PY_UPDATE   = None;
     PY_DRAW     = None;
+    BLIP_BUF    = None;
     PYXEL_READY = false;
 }
 
@@ -547,6 +570,9 @@ pub unsafe extern "C" fn retro_run() {
 
     // 7. Submit framebuffer to RetroArch
     submit_pyxel_frame();
+
+    // 8. Render and submit audio samples to RetroArch
+    submit_audio_frame();
 }
 
 // ---------------------------------------------------------------------------
@@ -607,6 +633,24 @@ unsafe fn submit_fallback_frame() {
     }
 }
 
+unsafe fn submit_audio_frame() {
+    let Some(ref mut blip) = BLIP_BUF else { return; };
+    let Some(audio_cb)     = AUDIO_BATCH_CB else { return; };
+
+    // Render mono PCM from Pyxel's internal mixer
+    let mut mono = [0i16; AUDIO_SAMPLES_PER_FRAME];
+    pyxel_core::Audio::render_samples(pyxel_core::channels(), blip, &mut mono);
+
+    // Convert mono → stereo interleaved (L/R identical) as libretro expects
+    let mut stereo = [0i16; AUDIO_SAMPLES_PER_FRAME * 2];
+    for (i, &s) in mono.iter().enumerate() {
+        stereo[i * 2]     = s; // L
+        stereo[i * 2 + 1] = s; // R
+    }
+
+    audio_cb(stereo.as_ptr(), AUDIO_SAMPLES_PER_FRAME);
+}
+
 // ---------------------------------------------------------------------------
 // Required stubs
 // ---------------------------------------------------------------------------
@@ -623,15 +667,3 @@ unsafe fn submit_fallback_frame() {
 #[no_mangle] pub unsafe extern "C" fn retro_get_region() -> c_uint { 0 }
 #[no_mangle] pub unsafe extern "C" fn retro_get_memory_data(_id: c_uint) -> *mut c_void { std::ptr::null_mut() }
 #[no_mangle] pub unsafe extern "C" fn retro_get_memory_size(_id: c_uint) -> usize { 0 }
-
-// --- TEMPORARY: API existence probe for Audio::render_samples (delete after check) ---
-#[allow(dead_code)]
-fn _probe_audio_api() {
-    unsafe {
-        let channels = pyxel_core::channels();
-        let mut blip_buf = blip_buf::BlipBuf::new(1024);
-        blip_buf.set_rates(1_789_773.0, 22050.0);
-        let mut out = [0i16; 368];
-        pyxel_core::Audio::render_samples(channels, &mut blip_buf, &mut out);
-    }
-}
