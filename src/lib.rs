@@ -693,6 +693,7 @@ pub unsafe extern "C" fn retro_unload_game() {
 // ---------------------------------------------------------------------------
 
 #[no_mangle]
+#[allow(static_mut_refs)]
 pub unsafe extern "C" fn retro_run() {
     // 1. Poll input
     if let Some(poll) = INPUT_POLL {
