@@ -726,8 +726,7 @@ pub unsafe extern "C" fn retro_run() {
     inject_input(buttons);
 
     // 5. Call Python game callbacks if loaded, otherwise show placeholder
-    let has_game = unsafe { std::ptr::read(std::ptr::addr_of!(PY_UPDATE)).is_some() || std::ptr::read(std::ptr::addr_of!(PY_DRAW)).is_some() };
-    if has_game {
+    if unsafe { PY_UPDATE.is_some() || PY_DRAW.is_some() } {
         Python::with_gil(|py| {
             if let Some(ref update) = PY_UPDATE {
                 if let Err(e) = update.call0(py) { e.print(py); }
