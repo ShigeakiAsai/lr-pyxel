@@ -639,13 +639,6 @@ pub unsafe extern "C" fn retro_load_game(game: *const c_void) -> bool {
     let path = CStr::from_ptr(info.path).to_string_lossy().into_owned();
 
     Python::with_gil(|py| {
-        // Reset previous game callbacks inside GIL to ensure
-        // Py<PyAny> is dropped while the interpreter is running.
-        // Dropping outside the GIL causes double-free / corruption.
-        let _old_update = PY_UPDATE.take();
-        let _old_draw   = PY_DRAW.take();
-        drop(_old_update);
-        drop(_old_draw);
         // Add game directory to sys.path
         let sys     = py.import_bound("sys").expect("failed to import sys");
         let syspath = sys.getattr("path").unwrap();
