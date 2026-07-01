@@ -768,6 +768,9 @@ unsafe fn build_palette_lut() {
     }
 }
 
+// Previous frame's button bitmask — used to detect edges (press/release)
+static mut PREV_BUTTONS: u32 = 0;
+
 unsafe fn inject_input(buttons: u32) {
     const MAP: &[(u32, u32)] = &[
         (0, KEY_Z),
@@ -781,9 +784,17 @@ unsafe fn inject_input(buttons: u32) {
         (9, KEY_S),
     ];
     let px = pyxel_core::pyxel();
+    let changed = buttons ^ PREV_BUTTONS;
     for &(bit, key) in MAP {
-        px.set_button_state(key, buttons & (1 << bit) != 0);
+        let mask = 1u32 << bit;
+        if changed & mask != 0 {
+            // Only call set_button_state when the state actually changed.
+            // Calling press_key() every frame while held would make btnp()
+            // fire on every frame instead of just the first.
+            px.set_button_state(key, buttons & mask != 0);
+        }
     }
+    PREV_BUTTONS = buttons;
 }
 
 unsafe fn submit_pyxel_frame() {
