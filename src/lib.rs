@@ -282,26 +282,201 @@ fn add_key_constants(m: &Bound<'_, PyModule>) -> PyResult<()> {
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// Math functions
+// ---------------------------------------------------------------------------
+
+#[pyfunction] fn ceil(x: f32) -> i32 { pyxel_core::Pyxel::ceil(x) }
+#[pyfunction] fn floor(x: f32) -> i32 { pyxel_core::Pyxel::floor(x) }
+#[pyfunction] fn sqrt(x: f32) -> f32 { pyxel_core::Pyxel::sqrt(x) }
+#[pyfunction] fn sin(deg: f32) -> f32 { pyxel_core::Pyxel::sin(deg) }
+#[pyfunction] fn cos(deg: f32) -> f32 { pyxel_core::Pyxel::cos(deg) }
+#[pyfunction] fn atan2(y: f32, x: f32) -> f32 { pyxel_core::Pyxel::atan2(y, x) }
+#[pyfunction] fn sgn(x: f32) -> f32 { if x > 0.0 { 1.0 } else if x < 0.0 { -1.0 } else { 0.0 } }
+#[pyfunction] fn clamp(x: f32, lower: f32, upper: f32) -> f32 { x.clamp(lower, upper) }
+#[pyfunction] fn rseed(seed: u32) { pyxel_core::Pyxel::random_seed(seed); }
+#[pyfunction] fn rndi(a: i32, b: i32) -> i32 { pyxel_core::Pyxel::random_int(a, b) }
+#[pyfunction] fn rndf(a: f32, b: f32) -> f32 { pyxel_core::Pyxel::random_float(a, b) }
+#[pyfunction] fn nseed(seed: u32) { pyxel_core::Pyxel::noise_seed(seed); }
+
+#[pyfunction]
+#[pyo3(signature = (x, y=0.0, z=0.0))]
+fn noise(x: f32, y: f32, z: f32) -> f32 { pyxel_core::Pyxel::noise(x, y, z) }
+
+// ---------------------------------------------------------------------------
+// Drawing functions (remaining)
+// ---------------------------------------------------------------------------
+
+#[pyfunction]
+fn line(x1: f32, y1: f32, x2: f32, y2: f32, color: u8) {
+    unsafe { if PYXEL_READY { pyxel_core::pyxel().draw_line(x1, y1, x2, y2, color); } }
+}
+#[pyfunction]
+fn rectb(x: f32, y: f32, w: f32, h: f32, color: u8) {
+    unsafe { if PYXEL_READY { pyxel_core::pyxel().draw_rect_border(x, y, w, h, color); } }
+}
+#[pyfunction]
+fn circ(x: f32, y: f32, r: f32, color: u8) {
+    unsafe { if PYXEL_READY { pyxel_core::pyxel().draw_circle(x, y, r, color); } }
+}
+#[pyfunction]
+fn circb(x: f32, y: f32, r: f32, color: u8) {
+    unsafe { if PYXEL_READY { pyxel_core::pyxel().draw_circle_border(x, y, r, color); } }
+}
+#[pyfunction]
+fn elli(x: f32, y: f32, w: f32, h: f32, color: u8) {
+    unsafe { if PYXEL_READY { pyxel_core::pyxel().draw_ellipse(x, y, w, h, color); } }
+}
+#[pyfunction]
+fn ellib(x: f32, y: f32, w: f32, h: f32, color: u8) {
+    unsafe { if PYXEL_READY { pyxel_core::pyxel().draw_ellipse_border(x, y, w, h, color); } }
+}
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+fn tri(x1: f32, y1: f32, x2: f32, y2: f32, x3: f32, y3: f32, color: u8) {
+    unsafe { if PYXEL_READY { pyxel_core::pyxel().draw_triangle(x1, y1, x2, y2, x3, y3, color); } }
+}
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+fn trib(x1: f32, y1: f32, x2: f32, y2: f32, x3: f32, y3: f32, color: u8) {
+    unsafe { if PYXEL_READY { pyxel_core::pyxel().draw_triangle_border(x1, y1, x2, y2, x3, y3, color); } }
+}
+#[pyfunction]
+fn fill(x: f32, y: f32, color: u8) {
+    unsafe { if PYXEL_READY { pyxel_core::pyxel().flood_fill(x, y, color); } }
+}
+#[pyfunction]
+#[pyo3(signature = (x=None, y=None, w=None, h=None))]
+fn clip(x: Option<f32>, y: Option<f32>, w: Option<f32>, h: Option<f32>) {
+    unsafe {
+        if !PYXEL_READY { return; }
+        match (x, y, w, h) {
+            (Some(x), Some(y), Some(w), Some(h)) => pyxel_core::pyxel().set_clip_rect(x, y, w, h),
+            _ => pyxel_core::pyxel().reset_clip_rect(),
+        }
+    }
+}
+#[pyfunction]
+#[pyo3(signature = (x=None, y=None))]
+fn camera(x: Option<f32>, y: Option<f32>) {
+    unsafe {
+        if !PYXEL_READY { return; }
+        match (x, y) {
+            (Some(x), Some(y)) => pyxel_core::pyxel().set_camera(x, y),
+            _ => pyxel_core::pyxel().reset_camera(),
+        }
+    }
+}
+#[pyfunction]
+#[pyo3(signature = (col1=None, col2=None))]
+fn pal(col1: Option<u8>, col2: Option<u8>) {
+    unsafe {
+        if !PYXEL_READY { return; }
+        match (col1, col2) {
+            (Some(c1), Some(c2)) => pyxel_core::pyxel().map_color(c1, c2),
+            _ => pyxel_core::pyxel().reset_color_map(),
+        }
+    }
+}
+#[pyfunction]
+fn dither(alpha: f32) {
+    unsafe { if PYXEL_READY { pyxel_core::pyxel().set_dithering(alpha); } }
+}
+
+// ---------------------------------------------------------------------------
+// Input functions (remaining)
+// ---------------------------------------------------------------------------
+
+#[pyfunction]
+fn btnr(key: u32) -> bool {
+    unsafe { if PYXEL_READY { pyxel_core::pyxel().is_button_released(key) } else { false } }
+}
+#[pyfunction]
+fn btnv(key: u32) -> i32 {
+    unsafe { if PYXEL_READY { pyxel_core::pyxel().button_value(key) } else { 0 } }
+}
+#[pyfunction]
+fn mouse(visible: bool) {
+    unsafe { if PYXEL_READY { pyxel_core::pyxel().set_mouse_visible(visible); } }
+}
+
+// ---------------------------------------------------------------------------
+// System functions (remaining)
+// ---------------------------------------------------------------------------
+
+#[pyfunction]
+fn quit() {
+    unsafe {
+        if let Some(env) = ENVIRON_CB {
+            env(rust_libretro_sys::RETRO_ENVIRONMENT_SHUTDOWN, std::ptr::null_mut());
+        }
+    }
+}
+#[pyfunction]
+fn width_fn() -> u32 { unsafe { *pyxel_core::width() } }
+#[pyfunction]
+fn height_fn() -> u32 { unsafe { *pyxel_core::height() } }
+
 // -- module registration -----------------------------------------------------
 
 #[pymodule]
 fn pyxel(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
+    // Drawing
     m.add_function(wrap_pyfunction!(cls,         m)?)?;
     m.add_function(wrap_pyfunction!(rect,        m)?)?;
+    m.add_function(wrap_pyfunction!(rectb,       m)?)?;
     m.add_function(wrap_pyfunction!(text,        m)?)?;
     m.add_function(wrap_pyfunction!(pset,        m)?)?;
     m.add_function(wrap_pyfunction!(pget,        m)?)?;
+    m.add_function(wrap_pyfunction!(line,        m)?)?;
+    m.add_function(wrap_pyfunction!(circ,        m)?)?;
+    m.add_function(wrap_pyfunction!(circb,       m)?)?;
+    m.add_function(wrap_pyfunction!(elli,        m)?)?;
+    m.add_function(wrap_pyfunction!(ellib,       m)?)?;
+    m.add_function(wrap_pyfunction!(tri,         m)?)?;
+    m.add_function(wrap_pyfunction!(trib,        m)?)?;
+    m.add_function(wrap_pyfunction!(fill,        m)?)?;
+    m.add_function(wrap_pyfunction!(clip,        m)?)?;
+    m.add_function(wrap_pyfunction!(camera,      m)?)?;
+    m.add_function(wrap_pyfunction!(pal,         m)?)?;
+    m.add_function(wrap_pyfunction!(dither,      m)?)?;
     m.add_function(wrap_pyfunction!(blt,         m)?)?;
     m.add_function(wrap_pyfunction!(image_load,  m)?)?;
     m.add_function(wrap_pyfunction!(image_pset,  m)?)?;
+    // Input
+    m.add_function(wrap_pyfunction!(btn,         m)?)?;
+    m.add_function(wrap_pyfunction!(btnp,        m)?)?;
+    m.add_function(wrap_pyfunction!(btnr,        m)?)?;
+    m.add_function(wrap_pyfunction!(btnv,        m)?)?;
+    m.add_function(wrap_pyfunction!(mouse,       m)?)?;
+    // Audio
     m.add_function(wrap_pyfunction!(sound_set,   m)?)?;
     m.add_function(wrap_pyfunction!(play,        m)?)?;
     m.add_function(wrap_pyfunction!(stop,        m)?)?;
-    m.add_function(wrap_pyfunction!(btn,         m)?)?;
-    m.add_function(wrap_pyfunction!(btnp,        m)?)?;
+    // Math
+    m.add_function(wrap_pyfunction!(ceil,        m)?)?;
+    m.add_function(wrap_pyfunction!(floor,       m)?)?;
+    m.add_function(wrap_pyfunction!(clamp,       m)?)?;
+    m.add_function(wrap_pyfunction!(sgn,         m)?)?;
+    m.add_function(wrap_pyfunction!(sqrt,        m)?)?;
+    m.add_function(wrap_pyfunction!(sin,         m)?)?;
+    m.add_function(wrap_pyfunction!(cos,         m)?)?;
+    m.add_function(wrap_pyfunction!(atan2,       m)?)?;
+    m.add_function(wrap_pyfunction!(rseed,       m)?)?;
+    m.add_function(wrap_pyfunction!(rndi,        m)?)?;
+    m.add_function(wrap_pyfunction!(rndf,        m)?)?;
+    m.add_function(wrap_pyfunction!(nseed,       m)?)?;
+    m.add_function(wrap_pyfunction!(noise,       m)?)?;
+    // System
     m.add_function(wrap_pyfunction!(frame_count, m)?)?;
+    m.add_function(wrap_pyfunction!(quit,        m)?)?;
+    m.add_function(wrap_pyfunction!(width_fn,    m)?)?;
+    m.add_function(wrap_pyfunction!(height_fn,   m)?)?;
     m.add_function(wrap_pyfunction!(init,        m)?)?;
     m.add_function(wrap_pyfunction!(run,         m)?)?;
+    // width/height as module attributes
+    m.add("width",  unsafe { *pyxel_core::width() })?;
+    m.add("height", unsafe { *pyxel_core::height() })?;
     add_key_constants(m)?;
     Ok(())
 }
