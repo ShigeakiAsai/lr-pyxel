@@ -247,11 +247,11 @@ fn sound_set(
 // play(ch, snd, loop=False)
 // Plays sound bank `snd` once (or looped) on channel `ch`.
 #[pyfunction]
-#[pyo3(signature = (ch, snd, r#loop=false))]
-fn play(ch: u32, snd: u32, r#loop: bool) {
+#[pyo3(signature = (ch, snd, r#loop=false, resume=false))]
+fn play(ch: u32, snd: u32, r#loop: bool, resume: bool) {
     unsafe {
         if PYXEL_READY {
-            pyxel_core::pyxel().play_sound(ch, snd, Some(0.0), r#loop, false);
+            pyxel_core::pyxel().play_sound(ch, snd, Some(0.0), r#loop, resume);
         }
     }
 }
