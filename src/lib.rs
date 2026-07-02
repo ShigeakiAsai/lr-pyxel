@@ -37,6 +37,10 @@ const SCREEN_W: u32 = 128;
 const SCREEN_H: u32 = 128;
 const FPS: u32      = 60;
 
+// Game-requested FPS (set by pyxel.init(), default 30)
+// Used to skip frames: a 30fps game runs update/draw every 2nd retro_run() call
+static mut GAME_FPS: u32 = 30;
+
 // Pre-built RGB565 palette LUT (256 entries)
 static mut PALETTE_RGB565: [u16; 256] = [0u16; 256];
 
@@ -321,7 +325,10 @@ fn init(
     title: Option<&str>, fps: Option<u32>, quit_key: Option<u32>,
     display_scale: Option<u32>, capture_scale: Option<u32>, capture_sec: Option<u32>,
 ) {
-    let _ = (w, h, title, fps, quit_key, display_scale, capture_scale, capture_sec);
+    // Save game-requested FPS (default 30 if not specified)
+    unsafe {
+        GAME_FPS = fps.unwrap_or(30).clamp(1, 60);
+    }
 }
 
 // run(update, draw) — caches the callbacks for the libretro frame loop.
@@ -1012,16 +1019,27 @@ pub unsafe extern "C" fn retro_run() {
         return;
     }
 
-    // 4. Call Python game callbacks if loaded, otherwise show placeholder
+    // 4. Call Python game callbacks if loaded, otherwise show placeholder.
+    //    For games running at less than 60fps, skip update()/draw() on
+    //    intermediate frames so the game runs at its intended speed.
+    //    e.g. GAME_FPS=30 → call update/draw every 2nd retro_run() call.
+    let run_this_frame = unsafe {
+        let fc = *pyxel_core::frame_count();
+        let step = (FPS / GAME_FPS).max(1);
+        fc % step == 0
+    };
+
     if unsafe { PY_UPDATE.is_some() || PY_DRAW.is_some() } {
-        Python::with_gil(|py| {
-            if let Some(ref update) = PY_UPDATE {
-                if let Err(e) = update.call0(py) { e.print(py); }
-            }
-            if let Some(ref draw) = PY_DRAW {
-                if let Err(e) = draw.call0(py) { e.print(py); }
-            }
-        });
+        if run_this_frame {
+            Python::with_gil(|py| {
+                if let Some(ref update) = PY_UPDATE {
+                    if let Err(e) = update.call0(py) { e.print(py); }
+                }
+                if let Some(ref draw) = PY_DRAW {
+                    if let Err(e) = draw.call0(py) { e.print(py); }
+                }
+            });
+        }
     } else {
         // No game loaded — light blue placeholder
         pyxel_core::pyxel().clear(11);
@@ -1140,18 +1158,23 @@ unsafe fn submit_audio_frame() {
     let Some(ref mut blip) = BLIP_BUF else { return; };
     let Some(audio_cb)     = AUDIO_BATCH_CB else { return; };
 
+    // Calculate samples needed per retro_run() call based on game FPS.
+    // At 30fps we need 2x samples per call vs 60fps.
+    let samples = (pyxel_core::AUDIO_SAMPLE_RATE / GAME_FPS) as usize;
+    let samples = samples.min(AUDIO_SAMPLES_PER_FRAME * 2); // cap at 2x buffer
+
     // Render mono PCM from Pyxel's internal mixer
-    let mut mono = [0i16; AUDIO_SAMPLES_PER_FRAME];
+    let mut mono = vec![0i16; samples];
     pyxel_core::Audio::render_samples(pyxel_core::channels(), blip, &mut mono);
 
     // Convert mono → stereo interleaved (L/R identical) as libretro expects
-    let mut stereo = [0i16; AUDIO_SAMPLES_PER_FRAME * 2];
+    let mut stereo = vec![0i16; samples * 2];
     for (i, &s) in mono.iter().enumerate() {
         stereo[i * 2]     = s; // L
         stereo[i * 2 + 1] = s; // R
     }
 
-    audio_cb(stereo.as_ptr(), AUDIO_SAMPLES_PER_FRAME);
+    audio_cb(stereo.as_ptr(), samples);
 }
 
 // ---------------------------------------------------------------------------
