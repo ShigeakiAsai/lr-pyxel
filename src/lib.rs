@@ -575,6 +575,13 @@ pub unsafe extern "C" fn retro_get_system_av_info(info: *mut c_void) {
 
 #[no_mangle]
 pub unsafe extern "C" fn retro_init() {
+    // Guard: pyxel_init() and Python must only be initialized once.
+    // RetroArch may call retro_init() again when loading a second content
+    // without fully unloading the core (e.g. after SHUTDOWN).
+    if PYXEL_READY {
+        return;
+    }
+
     // Register "pyxel" built-in module BEFORE Py_Initialize
     append_to_inittab!(pyxel);
 
@@ -613,8 +620,10 @@ pub unsafe extern "C" fn retro_deinit() {
         PY_UPDATE = None;
         PY_DRAW   = None;
     });
-    BLIP_BUF    = None;
-    PYXEL_READY = false;
+    // NOTE: do NOT reset PYXEL_READY or BLIP_BUF here.
+    // RetroArch may call retro_init() again after retro_deinit() when
+    // switching content, and we guard retro_init() with PYXEL_READY.
+    // Pyxel and Python cannot be re-initialized once started.
 }
 
 // ---------------------------------------------------------------------------
