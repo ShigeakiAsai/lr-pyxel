@@ -10,7 +10,15 @@ use pyo3::types::PyModule;
 
 use pyxel_core::{
     colors, height, init as pyxel_init, screen, width,
-    KEY_A, KEY_DOWN, KEY_LEFT, KEY_RETURN, KEY_RIGHT, KEY_S, KEY_UP, KEY_X, KEY_Z,
+    KEY_0, KEY_1, KEY_2, KEY_3, KEY_4, KEY_5, KEY_6, KEY_7, KEY_8, KEY_9,
+    KEY_A, KEY_B, KEY_C, KEY_D, KEY_E, KEY_F, KEY_G, KEY_H, KEY_I, KEY_J,
+    KEY_K, KEY_L, KEY_M, KEY_N, KEY_O, KEY_P, KEY_Q, KEY_R, KEY_S, KEY_T,
+    KEY_U, KEY_V, KEY_W, KEY_X, KEY_Y, KEY_Z,
+    KEY_UP, KEY_DOWN, KEY_LEFT, KEY_RIGHT,
+    KEY_RETURN, KEY_ESCAPE, KEY_SPACE, KEY_BACKSPACE, KEY_TAB,
+    KEY_LSHIFT, KEY_RSHIFT, KEY_LCTRL, KEY_RCTRL, KEY_LALT, KEY_RALT,
+    KEY_F1, KEY_F2, KEY_F3, KEY_F4, KEY_F5, KEY_F6,
+    KEY_F7, KEY_F8, KEY_F9, KEY_F10, KEY_F11, KEY_F12,
 };
 
 static mut VIDEO_CB:    Option<unsafe extern "C" fn(*const c_void, c_uint, c_uint, usize)>   = None;
@@ -312,16 +320,69 @@ fn run(update: PyObject, draw: PyObject) {
 // -- key constants -----------------------------------------------------------
 
 fn add_key_constants(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add("KEY_UP",     pyxel_core::KEY_UP)?;
-    m.add("KEY_DOWN",   pyxel_core::KEY_DOWN)?;
-    m.add("KEY_LEFT",   pyxel_core::KEY_LEFT)?;
-    m.add("KEY_RIGHT",  pyxel_core::KEY_RIGHT)?;
-    m.add("KEY_Z",      pyxel_core::KEY_Z)?;
-    m.add("KEY_X",      pyxel_core::KEY_X)?;
-    m.add("KEY_A",      pyxel_core::KEY_A)?;
-    m.add("KEY_S",      pyxel_core::KEY_S)?;
-    m.add("KEY_RETURN", pyxel_core::KEY_RETURN)?;
-    m.add("KEY_ESCAPE", pyxel_core::KEY_ESCAPE)?;
+    m.add("KEY_UP",        pyxel_core::KEY_UP)?;
+    m.add("KEY_DOWN",      pyxel_core::KEY_DOWN)?;
+    m.add("KEY_LEFT",      pyxel_core::KEY_LEFT)?;
+    m.add("KEY_RIGHT",     pyxel_core::KEY_RIGHT)?;
+    m.add("KEY_Z",         pyxel_core::KEY_Z)?;
+    m.add("KEY_X",         pyxel_core::KEY_X)?;
+    m.add("KEY_A",         pyxel_core::KEY_A)?;
+    m.add("KEY_B",         pyxel_core::KEY_B)?;
+    m.add("KEY_C",         pyxel_core::KEY_C)?;
+    m.add("KEY_D",         pyxel_core::KEY_D)?;
+    m.add("KEY_E",         pyxel_core::KEY_E)?;
+    m.add("KEY_F",         pyxel_core::KEY_F)?;
+    m.add("KEY_G",         pyxel_core::KEY_G)?;
+    m.add("KEY_H",         pyxel_core::KEY_H)?;
+    m.add("KEY_I",         pyxel_core::KEY_I)?;
+    m.add("KEY_J",         pyxel_core::KEY_J)?;
+    m.add("KEY_K",         pyxel_core::KEY_K)?;
+    m.add("KEY_L",         pyxel_core::KEY_L)?;
+    m.add("KEY_M",         pyxel_core::KEY_M)?;
+    m.add("KEY_N",         pyxel_core::KEY_N)?;
+    m.add("KEY_O",         pyxel_core::KEY_O)?;
+    m.add("KEY_P",         pyxel_core::KEY_P)?;
+    m.add("KEY_Q",         pyxel_core::KEY_Q)?;
+    m.add("KEY_R",         pyxel_core::KEY_R)?;
+    m.add("KEY_S",         pyxel_core::KEY_S)?;
+    m.add("KEY_T",         pyxel_core::KEY_T)?;
+    m.add("KEY_U",         pyxel_core::KEY_U)?;
+    m.add("KEY_V",         pyxel_core::KEY_V)?;
+    m.add("KEY_W",         pyxel_core::KEY_W)?;
+    m.add("KEY_Y",         pyxel_core::KEY_Y)?;
+    m.add("KEY_RETURN",    pyxel_core::KEY_RETURN)?;
+    m.add("KEY_ESCAPE",    pyxel_core::KEY_ESCAPE)?;
+    m.add("KEY_SPACE",     pyxel_core::KEY_SPACE)?;
+    m.add("KEY_BACKSPACE", pyxel_core::KEY_BACKSPACE)?;
+    m.add("KEY_TAB",       pyxel_core::KEY_TAB)?;
+    m.add("KEY_LSHIFT",    pyxel_core::KEY_LSHIFT)?;
+    m.add("KEY_RSHIFT",    pyxel_core::KEY_RSHIFT)?;
+    m.add("KEY_LCTRL",     pyxel_core::KEY_LCTRL)?;
+    m.add("KEY_RCTRL",     pyxel_core::KEY_RCTRL)?;
+    m.add("KEY_LALT",      pyxel_core::KEY_LALT)?;
+    m.add("KEY_RALT",      pyxel_core::KEY_RALT)?;
+    m.add("KEY_0",         pyxel_core::KEY_0)?;
+    m.add("KEY_1",         pyxel_core::KEY_1)?;
+    m.add("KEY_2",         pyxel_core::KEY_2)?;
+    m.add("KEY_3",         pyxel_core::KEY_3)?;
+    m.add("KEY_4",         pyxel_core::KEY_4)?;
+    m.add("KEY_5",         pyxel_core::KEY_5)?;
+    m.add("KEY_6",         pyxel_core::KEY_6)?;
+    m.add("KEY_7",         pyxel_core::KEY_7)?;
+    m.add("KEY_8",         pyxel_core::KEY_8)?;
+    m.add("KEY_9",         pyxel_core::KEY_9)?;
+    m.add("KEY_F1",        pyxel_core::KEY_F1)?;
+    m.add("KEY_F2",        pyxel_core::KEY_F2)?;
+    m.add("KEY_F3",        pyxel_core::KEY_F3)?;
+    m.add("KEY_F4",        pyxel_core::KEY_F4)?;
+    m.add("KEY_F5",        pyxel_core::KEY_F5)?;
+    m.add("KEY_F6",        pyxel_core::KEY_F6)?;
+    m.add("KEY_F7",        pyxel_core::KEY_F7)?;
+    m.add("KEY_F8",        pyxel_core::KEY_F8)?;
+    m.add("KEY_F9",        pyxel_core::KEY_F9)?;
+    m.add("KEY_F10",       pyxel_core::KEY_F10)?;
+    m.add("KEY_F11",       pyxel_core::KEY_F11)?;
+    m.add("KEY_F12",       pyxel_core::KEY_F12)?;
     Ok(())
 }
 
@@ -903,6 +964,15 @@ pub unsafe extern "C" fn retro_run() {
 
     // 6. Inject input AFTER flip_screen() so btnp() sees a single press
     inject_input(buttons);
+
+    // Update pyxel.frame_count module attribute so scripts can use it
+    // as either pyxel.frame_count (attribute) or pyxel.frame_count() (function)
+    Python::with_gil(|py| {
+        if let Ok(m) = py.import_bound("pyxel") {
+            let fc = *pyxel_core::frame_count();
+            let _ = m.setattr("frame_count", fc);
+        }
+    });
 
     // 7. Submit framebuffer to RetroArch
     submit_pyxel_frame();
