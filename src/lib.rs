@@ -814,13 +814,19 @@ pub unsafe extern "C" fn retro_load_game(game: *const c_void) -> bool {
 
         match py.run_bound(&code, Some(&globals), None) {
             Ok(_) => {
-                // Cache update() and draw() if defined at module level
-                PY_UPDATE = globals.get_item("update").ok()
-                    .flatten()
-                    .map(|f| f.into_py(py));
-                PY_DRAW = globals.get_item("draw").ok()
-                    .flatten()
-                    .map(|f| f.into_py(py));
+                // If pyxel.run(update, draw) was called during script execution
+                // (class-based games), PY_UPDATE/PY_DRAW are already set.
+                // Only fall back to module-level update()/draw() if not set yet.
+                if PY_UPDATE.is_none() {
+                    PY_UPDATE = globals.get_item("update").ok()
+                        .flatten()
+                        .map(|f| f.into_py(py));
+                }
+                if PY_DRAW.is_none() {
+                    PY_DRAW = globals.get_item("draw").ok()
+                        .flatten()
+                        .map(|f| f.into_py(py));
+                }
             }
             Err(e) => {
                 e.print(py);
