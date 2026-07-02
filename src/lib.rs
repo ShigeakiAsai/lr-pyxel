@@ -33,8 +33,8 @@ static mut INPUT_STATE: Option<unsafe extern "C" fn(c_uint, c_uint, c_uint, c_ui
 static mut ENVIRON_CB:  Option<unsafe extern "C" fn(c_uint, *mut c_void) -> bool>             = None;
 
 // Screen dimensions
-const SCREEN_W: u32 = 128;
-const SCREEN_H: u32 = 128;
+const SCREEN_W: u32 = 512;
+const SCREEN_H: u32 = 512;
 const FPS: u32      = 60;
 
 // Game-requested FPS (set by pyxel.init(), default 30)
@@ -1148,7 +1148,7 @@ unsafe fn inject_input(buttons: u32) {
 }
 
 unsafe fn submit_pyxel_frame() {
-    // Pyxel internal buffer is always SCREEN_W x SCREEN_H (128x128).
+    // Pyxel internal buffer is SCREEN_W x SCREEN_H (512x512).
     // We submit only the GAME_W x GAME_H portion that the game requested
     // via pyxel.init(), cropping the bottom-right if needed.
     let src_w = *width()  as usize;  // Pyxel internal width (128)
