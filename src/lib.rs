@@ -156,6 +156,31 @@ fn image_pset(bank: usize, x: f32, y: f32, color: u8) -> PyResult<()> {
     }
 }
 
+// load(filename, excl_images=False, excl_tilemaps=False, excl_sounds=False, excl_musics=False)
+// Loads a .pyxres resource file into the current Pyxel session.
+#[pyfunction]
+#[pyo3(signature = (filename, excl_images=false, excl_tilemaps=false, excl_sounds=false, excl_musics=false))]
+fn load(
+    filename: &str,
+    excl_images: bool,
+    excl_tilemaps: bool,
+    excl_sounds: bool,
+    excl_musics: bool,
+) -> PyResult<()> {
+    unsafe {
+        if !PYXEL_READY { return Ok(()); }
+        pyxel_core::pyxel()
+            .load_resource(
+                filename,
+                Some(excl_images),
+                Some(excl_tilemaps),
+                Some(excl_sounds),
+                Some(excl_musics),
+            )
+            .map_err(pyo3::exceptions::PyOSError::new_err)
+    }
+}
+
 // -- sound -------------------------------------------------------------------
 
 // sound_set(no, notes, tones, volumes, effects, speed)
@@ -463,6 +488,7 @@ fn pyxel(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(blt,         m)?)?;
     m.add_function(wrap_pyfunction!(image_load,  m)?)?;
     m.add_function(wrap_pyfunction!(image_pset,  m)?)?;
+    m.add_function(wrap_pyfunction!(load,        m)?)?;
     // Input
     m.add_function(wrap_pyfunction!(btn,         m)?)?;
     m.add_function(wrap_pyfunction!(btnp,        m)?)?;
