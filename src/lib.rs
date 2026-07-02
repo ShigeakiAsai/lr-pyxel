@@ -8,6 +8,7 @@ use pyo3::prelude::*;
 use pyo3::append_to_inittab;
 use pyo3::types::PyModule;
 
+#[allow(unused_imports)]
 use pyxel_core::{
     colors, height, init as pyxel_init, screen, width,
     KEY_0, KEY_1, KEY_2, KEY_3, KEY_4, KEY_5, KEY_6, KEY_7, KEY_8, KEY_9,
@@ -559,6 +560,7 @@ fn quit() {
 // We cache a no-op update/draw so retro_run() keeps displaying the
 // already-rendered frame instead of falling back to the placeholder.
 #[pyfunction]
+#[allow(static_mut_refs)]
 fn show() {
     unsafe {
         if !PYXEL_READY { return; }
@@ -890,6 +892,7 @@ struct RetroGameInfo {
 }
 
 #[no_mangle]
+#[allow(static_mut_refs)]
 pub unsafe extern "C" fn retro_load_game(game: *const c_void) -> bool {
     if game.is_null() {
         return true; // content-less boot
