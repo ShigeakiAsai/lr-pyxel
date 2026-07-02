@@ -546,8 +546,8 @@ pub unsafe extern "C" fn retro_set_input_state(
 pub unsafe extern "C" fn retro_get_system_info(info: *mut c_void) {
     let info = info as *mut rust_libretro_sys::retro_system_info;
     (*info).library_name     = b"Pyxel\0".as_ptr() as *const c_char;
-    (*info).library_version  = b"0.4.1\0".as_ptr() as *const c_char;
-    (*info).valid_extensions = b"py\0".as_ptr()    as *const c_char;
+    (*info).library_version  = b"0.5.0\0".as_ptr() as *const c_char;
+    (*info).valid_extensions = b"py|pyxapp\0".as_ptr() as *const c_char;
     (*info).need_fullpath    = true;
     (*info).block_extract    = false;
 }
@@ -575,13 +575,6 @@ pub unsafe extern "C" fn retro_get_system_av_info(info: *mut c_void) {
 
 #[no_mangle]
 pub unsafe extern "C" fn retro_init() {
-    // Guard: pyxel_init() and Python must only be initialized once.
-    // RetroArch may call retro_init() again when loading a second content
-    // without fully unloading the core (e.g. after SHUTDOWN).
-    if PYXEL_READY {
-        return;
-    }
-
     // Register "pyxel" built-in module BEFORE Py_Initialize
     append_to_inittab!(pyxel);
 
@@ -615,15 +608,69 @@ pub unsafe extern "C" fn retro_init() {
 
 #[no_mangle]
 pub unsafe extern "C" fn retro_deinit() {
-    // Drop Py<PyAny> inside GIL to avoid double-free
-    Python::with_gil(|_py| {
-        PY_UPDATE = None;
-        PY_DRAW   = None;
-    });
-    // NOTE: do NOT reset PYXEL_READY or BLIP_BUF here.
-    // RetroArch may call retro_init() again after retro_deinit() when
-    // switching content, and we guard retro_init() with PYXEL_READY.
-    // Pyxel and Python cannot be re-initialized once started.
+    PY_UPDATE   = None;
+    PY_DRAW     = None;
+    BLIP_BUF    = None;
+    PYXEL_READY = false;
+}
+
+// ---------------------------------------------------------------------------
+// .pyxapp extraction
+// ---------------------------------------------------------------------------
+
+// Extract a .pyxapp (ZIP) file to a temporary directory and return the path
+// to the startup script (.pyxapp_startup_script contains its relative path).
+fn extract_pyxapp(pyxapp_path: &str) -> Option<String> {
+    use std::io::Read;
+
+    let file = std::fs::File::open(pyxapp_path).ok()?;
+    let mut archive = zip::ZipArchive::new(file).ok()?;
+
+    // Extract to /tmp/lr-pyxel/<stem>/
+    let stem = std::path::Path::new(pyxapp_path)
+        .file_stem()
+        .unwrap_or_default()
+        .to_string_lossy();
+    let extract_dir = std::path::PathBuf::from(format!("/tmp/lr-pyxel/{}", stem));
+    std::fs::create_dir_all(&extract_dir).ok()?;
+
+    // Security check: ensure no path traversal
+    let extract_dir_abs = extract_dir.canonicalize().ok()?;
+    for i in 0..archive.len() {
+        let file = archive.by_index(i).ok()?;
+        let target = extract_dir.join(file.name());
+        let target_abs = if target.exists() {
+            target.canonicalize().ok()?
+        } else {
+            // For files that don't exist yet, check parent
+            let parent = target.parent()?;
+            std::fs::create_dir_all(parent).ok()?;
+            parent.canonicalize().ok()?.join(file.name().split('/').last()?)
+        };
+        if !target_abs.starts_with(&extract_dir_abs) {
+            eprintln!("[lr-pyxel] Unsafe path in .pyxapp: {}", file.name());
+            return None;
+        }
+    }
+
+    // Extract all files
+    archive.extract(&extract_dir).ok()?;
+
+    // Find .pyxapp_startup_script in any subdirectory
+    for entry in std::fs::read_dir(&extract_dir).ok()? {
+        let entry = entry.ok()?;
+        let subdir = entry.path();
+        if !subdir.is_dir() { continue; }
+        let startup_script_marker = subdir.join(".pyxapp_startup_script");
+        if startup_script_marker.exists() {
+            let script_rel = std::fs::read_to_string(&startup_script_marker).ok()?;
+            let script_path = subdir.join(script_rel.trim());
+            if script_path.exists() {
+                return Some(script_path.to_string_lossy().into_owned());
+            }
+        }
+    }
+    None
 }
 
 // ---------------------------------------------------------------------------
@@ -650,10 +697,23 @@ pub unsafe extern "C" fn retro_load_game(game: *const c_void) -> bool {
 
     let path = CStr::from_ptr(info.path).to_string_lossy().into_owned();
 
+    // Resolve the actual .py script path.
+    // For .pyxapp files: extract the ZIP and find the startup script.
+    // For .py files: use the path directly.
+    let script_path = if path.ends_with(".pyxapp") {
+        match extract_pyxapp(&path) {
+            Some(p) => p,
+            None => {
+                eprintln!("[lr-pyxel] Failed to extract .pyxapp: {}", path);
+                return true;
+            }
+        }
+    } else {
+        path.clone()
+    };
+
     Python::with_gil(|py| {
-        // Drop previous game callbacks inside GIL before loading new content.
-        // Py<PyAny> must be dropped while the interpreter is running to avoid
-        // double-free / SEGV on second content load.
+        // Drop previous game callbacks inside GIL to avoid double-free
         PY_UPDATE = None;
         PY_DRAW   = None;
 
@@ -661,7 +721,7 @@ pub unsafe extern "C" fn retro_load_game(game: *const c_void) -> bool {
         let sys     = py.import_bound("sys").expect("failed to import sys");
         let syspath = sys.getattr("path").unwrap();
         let syspath = syspath.downcast_into::<pyo3::types::PyList>().unwrap();
-        let game_dir = std::path::Path::new(&path)
+        let game_dir = std::path::Path::new(&script_path)
             .parent()
             .unwrap_or(std::path::Path::new("."))
             .to_string_lossy()
@@ -669,7 +729,7 @@ pub unsafe extern "C" fn retro_load_game(game: *const c_void) -> bool {
         syspath.insert(0, game_dir).unwrap();
 
         // Execute the game script
-        let code    = std::fs::read_to_string(&path).unwrap_or_default();
+        let code    = std::fs::read_to_string(&script_path).unwrap_or_default();
         let globals = pyo3::types::PyDict::new_bound(py);
 
         match py.run_bound(&code, Some(&globals), None) {
@@ -683,30 +743,18 @@ pub unsafe extern "C" fn retro_load_game(game: *const c_void) -> bool {
                     .map(|f| f.into_py(py));
             }
             Err(e) => {
-                // Print the error but still return true: RetroArch already
-                // committed to loading this core's content (need_fullpath=true
-                // skipped its own file read), so returning false here only
-                // produces a generic "Failed to load content" with no detail.
-                // Printing here gives the real Python traceback in the log.
                 e.print(py);
             }
         }
     });
 
-    // Always report success once we've reached this point: the .py file
-    // existed and was readable. Script errors are surfaced via e.print(py)
-    // above and result in PY_UPDATE/PY_DRAW staying None, which falls back
-    // to the placeholder screen in retro_run().
     true
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn retro_unload_game() {
-    // Drop Py<PyAny> inside GIL to avoid double-free
-    Python::with_gil(|_py| {
-        PY_UPDATE = None;
-        PY_DRAW   = None;
-    });
+    PY_UPDATE = None;
+    PY_DRAW   = None;
 }
 
 // ---------------------------------------------------------------------------
