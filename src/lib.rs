@@ -282,6 +282,26 @@ fn add_key_constants(m: &Bound<'_, PyModule>) -> PyResult<()> {
     Ok(())
 }
 
+fn add_color_constants(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add("COLOR_BLACK",      0u8)?;
+    m.add("COLOR_NAVY",       1u8)?;
+    m.add("COLOR_PURPLE",     2u8)?;
+    m.add("COLOR_GREEN",      3u8)?;
+    m.add("COLOR_BROWN",      4u8)?;
+    m.add("COLOR_DARK_BLUE",  5u8)?;
+    m.add("COLOR_LIGHT_BLUE", 6u8)?;
+    m.add("COLOR_WHITE",      7u8)?;
+    m.add("COLOR_RED",        8u8)?;
+    m.add("COLOR_ORANGE",     9u8)?;
+    m.add("COLOR_YELLOW",    10u8)?;
+    m.add("COLOR_LIME",      11u8)?;
+    m.add("COLOR_CYAN",      12u8)?;
+    m.add("COLOR_GRAY",      13u8)?;
+    m.add("COLOR_PINK",      14u8)?;
+    m.add("COLOR_PEACH",     15u8)?;
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Math functions
 // ---------------------------------------------------------------------------
@@ -478,6 +498,7 @@ fn pyxel(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("width",  *pyxel_core::width())?;
     m.add("height", *pyxel_core::height())?;
     add_key_constants(m)?;
+    add_color_constants(m)?;
     Ok(())
 }
 
@@ -621,7 +642,6 @@ pub unsafe extern "C" fn retro_deinit() {
 // Extract a .pyxapp (ZIP) file to a temporary directory and return the path
 // to the startup script (.pyxapp_startup_script contains its relative path).
 fn extract_pyxapp(pyxapp_path: &str) -> Option<String> {
-    use std::io::Read;
 
     let file = std::fs::File::open(pyxapp_path).ok()?;
     let mut archive = zip::ZipArchive::new(file).ok()?;
