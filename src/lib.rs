@@ -336,6 +336,14 @@ fn init(
         GAME_H = h.max(1);
         GAME_FPS = fps.unwrap_or(30).clamp(1, 60);
 
+        // Update pyxel.width/height module attributes to reflect game size
+        Python::with_gil(|py| {
+            if let Ok(m) = py.import_bound("pyxel") {
+                let _ = m.setattr("width",  GAME_W);
+                let _ = m.setattr("height", GAME_H);
+            }
+        });
+
         // Notify RetroArch of the game's actual screen geometry.
         // RETRO_ENVIRONMENT_SET_GEOMETRY (37) lets us change width/height
         // after init without restarting the core.
@@ -343,8 +351,8 @@ fn init(
             let geometry = rust_libretro_sys::retro_game_geometry {
                 base_width:   w,
                 base_height:  h,
-                max_width:    w,
-                max_height:   h,
+                max_width:    512,
+                max_height:   512,
                 aspect_ratio: w as f32 / h as f32,
             };
             env(37, &geometry as *const _ as *mut c_void);
