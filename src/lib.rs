@@ -608,8 +608,11 @@ pub unsafe extern "C" fn retro_init() {
 
 #[no_mangle]
 pub unsafe extern "C" fn retro_deinit() {
-    PY_UPDATE   = None;
-    PY_DRAW     = None;
+    // Drop Py<PyAny> inside GIL to avoid double-free
+    Python::with_gil(|_py| {
+        PY_UPDATE = None;
+        PY_DRAW   = None;
+    });
     BLIP_BUF    = None;
     PYXEL_READY = false;
 }
@@ -639,6 +642,12 @@ pub unsafe extern "C" fn retro_load_game(game: *const c_void) -> bool {
     let path = CStr::from_ptr(info.path).to_string_lossy().into_owned();
 
     Python::with_gil(|py| {
+        // Drop previous game callbacks inside GIL before loading new content.
+        // Py<PyAny> must be dropped while the interpreter is running to avoid
+        // double-free / SEGV on second content load.
+        PY_UPDATE = None;
+        PY_DRAW   = None;
+
         // Add game directory to sys.path
         let sys     = py.import_bound("sys").expect("failed to import sys");
         let syspath = sys.getattr("path").unwrap();
@@ -684,8 +693,11 @@ pub unsafe extern "C" fn retro_load_game(game: *const c_void) -> bool {
 
 #[no_mangle]
 pub unsafe extern "C" fn retro_unload_game() {
-    PY_UPDATE = None;
-    PY_DRAW   = None;
+    // Drop Py<PyAny> inside GIL to avoid double-free
+    Python::with_gil(|_py| {
+        PY_UPDATE = None;
+        PY_DRAW   = None;
+    });
 }
 
 // ---------------------------------------------------------------------------
