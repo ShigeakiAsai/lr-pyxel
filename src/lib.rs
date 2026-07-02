@@ -1039,31 +1039,29 @@ pub unsafe extern "C" fn retro_run() {
                     if let Err(e) = draw.call0(py) { e.print(py); }
                 }
             });
+
+            // 5. Advance one Pyxel frame (only on game frames).
+            //    flip_screen() advances audio clock and resets input state.
+            //    Must only be called when the game actually ran this frame.
+            pyxel_core::pyxel().flip_screen();
+
+            // Update pyxel.frame_count module attribute
+            Python::with_gil(|py| {
+                if let Ok(m) = py.import_bound("pyxel") {
+                    let fc = *pyxel_core::frame_count();
+                    let _ = m.setattr("frame_count", fc);
+                }
+            });
         }
     } else {
         // No game loaded — light blue placeholder
         pyxel_core::pyxel().clear(11);
     }
 
-    // 5. Advance one Pyxel frame.
-    //    flip_screen() calls start_input_frame() internally, resetting all key
-    //    states. inject_input() must come AFTER this so the fresh input is
-    //    registered in the new frame — preventing btnp() from firing every frame.
-    pyxel_core::pyxel().flip_screen();
-
     // 6. Inject input AFTER flip_screen() so btnp() sees a single press
     inject_input(buttons);
 
-    // Update pyxel.frame_count module attribute so scripts can use it
-    // as either pyxel.frame_count (attribute) or pyxel.frame_count() (function)
-    Python::with_gil(|py| {
-        if let Ok(m) = py.import_bound("pyxel") {
-            let fc = *pyxel_core::frame_count();
-            let _ = m.setattr("frame_count", fc);
-        }
-    });
-
-    // 7. Submit framebuffer to RetroArch
+    // 7. Submit framebuffer to RetroArch (every frame to keep display smooth)
     submit_pyxel_frame();
 
     // 8. Render and submit audio samples to RetroArch
