@@ -107,12 +107,25 @@ fn pget(x: f32, y: f32) -> u8 {
 // Draws a width x height region starting at (u, v) of image bank `img`
 // onto the screen at (x, y). `colkey` marks a transparent color index.
 #[pyfunction]
-#[pyo3(signature = (x, y, img, u, v, w, h, colkey=None))]
+#[pyo3(signature = (x, y, img, u, v, w, h, colkey=None, rotate=None, scale=None))]
 #[allow(clippy::too_many_arguments)]
-fn blt(x: f32, y: f32, img: u32, u: f32, v: f32, w: f32, h: f32, colkey: Option<u8>) {
+fn blt(x: f32, y: f32, img: u32, u: f32, v: f32, w: f32, h: f32, colkey: Option<u8>, rotate: Option<f32>, scale: Option<f32>) {
     unsafe {
         if PYXEL_READY {
-            pyxel_core::pyxel().draw_image(x, y, img, u, v, w, h, colkey, None, None);
+            pyxel_core::pyxel().draw_image(x, y, img, u, v, w, h, colkey, rotate, scale);
+        }
+    }
+}
+
+// bltm(x, y, tm, u, v, w, h, colkey=None, rotate=None, scale=None)
+// Draws a region of tilemap bank `tm` onto the screen at (x, y).
+#[pyfunction]
+#[pyo3(signature = (x, y, tm, u, v, w, h, colkey=None, rotate=None, scale=None))]
+#[allow(clippy::too_many_arguments)]
+fn bltm(x: f32, y: f32, tm: u32, u: f32, v: f32, w: f32, h: f32, colkey: Option<u8>, rotate: Option<f32>, scale: Option<f32>) {
+    unsafe {
+        if PYXEL_READY {
+            pyxel_core::pyxel().draw_tilemap(x, y, tm, u, v, w, h, colkey, rotate, scale);
         }
     }
 }
@@ -565,6 +578,7 @@ fn pyxel(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(pal,         m)?)?;
     m.add_function(wrap_pyfunction!(dither,      m)?)?;
     m.add_function(wrap_pyfunction!(blt,         m)?)?;
+    m.add_function(wrap_pyfunction!(bltm,        m)?)?;
     m.add_function(wrap_pyfunction!(image_load,  m)?)?;
     m.add_function(wrap_pyfunction!(image_pset,  m)?)?;
     m.add_function(wrap_pyfunction!(load,        m)?)?;
