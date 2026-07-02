@@ -41,6 +41,10 @@ const FPS: u32      = 60;
 // Used to skip frames: a 30fps game runs update/draw every 2nd retro_run() call
 static mut GAME_FPS: u32 = 30;
 
+// Game-requested screen size (set by pyxel.init(), default 128x128)
+static mut GAME_W: u32 = 128;
+static mut GAME_H: u32 = 128;
+
 // Pre-built RGB565 palette LUT (256 entries)
 static mut PALETTE_RGB565: [u16; 256] = [0u16; 256];
 
@@ -327,7 +331,9 @@ fn init(
 ) {
     let _ = (title, quit_key, display_scale, capture_scale, capture_sec);
     unsafe {
-        // Save game-requested FPS (default 30 if not specified)
+        // Save game-requested size and FPS
+        GAME_W = w.max(1);
+        GAME_H = h.max(1);
         GAME_FPS = fps.unwrap_or(30).clamp(1, 60);
 
         // Notify RetroArch of the game's actual screen geometry.
@@ -1144,20 +1150,27 @@ unsafe fn inject_input(buttons: u32) {
 }
 
 unsafe fn submit_pyxel_frame() {
-    let w = *width()  as usize;
-    let h = *height() as usize;
-    let pixels = w * h;
+    // Pyxel internal buffer is always SCREEN_W x SCREEN_H (128x128).
+    // We submit only the GAME_W x GAME_H portion that the game requested
+    // via pyxel.init(), cropping the bottom-right if needed.
+    let src_w = *width()  as usize;  // Pyxel internal width (128)
+    let dst_w = (GAME_W as usize).min(src_w);
+    let dst_h = (GAME_H as usize).min(*height() as usize);
 
     let screen_rc = screen();
     let src: *const u8 = (*screen_rc.get()).data_ptr() as *const u8;
 
-    let mut fb = vec![0u16; pixels];
-    for i in 0..pixels {
-        fb[i] = PALETTE_RGB565[*src.add(i) as usize];
+    // Build output framebuffer row by row
+    let mut fb = vec![0u16; dst_w * dst_h];
+    for y in 0..dst_h {
+        for x in 0..dst_w {
+            let idx = y * src_w + x;
+            fb[y * dst_w + x] = PALETTE_RGB565[*src.add(idx) as usize];
+        }
     }
 
     if let Some(video) = VIDEO_CB {
-        video(fb.as_ptr() as *const c_void, w as c_uint, h as c_uint, w * 2);
+        video(fb.as_ptr() as *const c_void, dst_w as c_uint, dst_h as c_uint, dst_w * 2);
     }
 }
 
