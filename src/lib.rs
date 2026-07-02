@@ -214,15 +214,25 @@ fn sound_set(
 }
 
 // play(ch, snd, loop=False)
-// Plays sound bank `snd` once (or looped) on channel `ch`. This is the
-// thin wrapper matching pyxel's public Python signature; start_sec and
-// should_resume are fixed to sensible defaults (start from 0.0, no resume).
+// Plays sound bank `snd` once (or looped) on channel `ch`.
 #[pyfunction]
 #[pyo3(signature = (ch, snd, r#loop=false))]
 fn play(ch: u32, snd: u32, r#loop: bool) {
     unsafe {
         if PYXEL_READY {
             pyxel_core::pyxel().play_sound(ch, snd, Some(0.0), r#loop, false);
+        }
+    }
+}
+
+// playm(msc, loop=False)
+// Plays music bank `msc`.
+#[pyfunction]
+#[pyo3(signature = (msc, r#loop=false))]
+fn playm(msc: u32, r#loop: bool) {
+    unsafe {
+        if PYXEL_READY {
+            pyxel_core::pyxel().play_music(msc, Some(0.0), r#loop);
         }
     }
 }
@@ -498,6 +508,7 @@ fn pyxel(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Audio
     m.add_function(wrap_pyfunction!(sound_set,   m)?)?;
     m.add_function(wrap_pyfunction!(play,        m)?)?;
+    m.add_function(wrap_pyfunction!(playm,       m)?)?;
     m.add_function(wrap_pyfunction!(stop,        m)?)?;
     // Math
     m.add_function(wrap_pyfunction!(ceil,        m)?)?;
