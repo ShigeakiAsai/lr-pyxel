@@ -622,6 +622,12 @@ pub unsafe extern "C" fn retro_get_system_av_info(info: *mut c_void) {
 
 #[no_mangle]
 pub unsafe extern "C" fn retro_init() {
+    // Guard: only initialize once. RetroArch may call retro_init() again
+    // when switching content without fully unloading the core.
+    if PYXEL_READY {
+        return;
+    }
+
     // Register "pyxel" built-in module BEFORE Py_Initialize
     append_to_inittab!(pyxel);
 
@@ -655,10 +661,14 @@ pub unsafe extern "C" fn retro_init() {
 
 #[no_mangle]
 pub unsafe extern "C" fn retro_deinit() {
-    PY_UPDATE   = None;
-    PY_DRAW     = None;
-    BLIP_BUF    = None;
-    PYXEL_READY = false;
+    // Drop Py<PyAny> inside GIL to avoid double-free
+    Python::with_gil(|_py| {
+        PY_UPDATE = None;
+        PY_DRAW   = None;
+    });
+    // NOTE: do NOT reset PYXEL_READY or BLIP_BUF here.
+    // RetroArch may call retro_init() again after retro_deinit() when
+    // switching content, and we guard retro_init() with PYXEL_READY.
 }
 
 // ---------------------------------------------------------------------------
@@ -804,8 +814,10 @@ pub unsafe extern "C" fn retro_load_game(game: *const c_void) -> bool {
 
 #[no_mangle]
 pub unsafe extern "C" fn retro_unload_game() {
-    PY_UPDATE = None;
-    PY_DRAW   = None;
+    Python::with_gil(|_py| {
+        PY_UPDATE = None;
+        PY_DRAW   = None;
+    });
 }
 
 // ---------------------------------------------------------------------------
