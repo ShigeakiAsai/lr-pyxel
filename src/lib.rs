@@ -763,7 +763,7 @@ pub unsafe extern "C" fn retro_load_game(game: *const c_void) -> bool {
         PY_UPDATE = None;
         PY_DRAW   = None;
 
-        // Add game directory to sys.path
+        // Add game directory to sys.path and set as working directory
         let sys     = py.import_bound("sys").expect("failed to import sys");
         let syspath = sys.getattr("path").unwrap();
         let syspath = syspath.downcast_into::<pyo3::types::PyList>().unwrap();
@@ -772,7 +772,12 @@ pub unsafe extern "C" fn retro_load_game(game: *const c_void) -> bool {
             .unwrap_or(std::path::Path::new("."))
             .to_string_lossy()
             .into_owned();
-        syspath.insert(0, game_dir).unwrap();
+        syspath.insert(0, game_dir.clone()).unwrap();
+
+        // Change working directory to the game directory so that relative
+        // paths in the script (e.g. pyxel.load("assets/foo.pyxres")) resolve
+        // correctly.
+        let _ = std::env::set_current_dir(&game_dir);
 
         // Execute the game script
         let code    = std::fs::read_to_string(&script_path).unwrap_or_default();
