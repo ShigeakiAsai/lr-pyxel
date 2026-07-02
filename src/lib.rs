@@ -780,17 +780,15 @@ pub unsafe extern "C" fn retro_get_system_info(info: *mut c_void) {
 #[no_mangle]
 pub unsafe extern "C" fn retro_get_system_av_info(info: *mut c_void) {
     let info = info as *mut rust_libretro_sys::retro_system_av_info;
-    (*info).geometry.base_width   = SCREEN_W;
-    (*info).geometry.base_height  = SCREEN_H;
-    (*info).geometry.max_width    = SCREEN_W;
-    (*info).geometry.max_height   = SCREEN_H;
-    (*info).geometry.aspect_ratio = 1.0;
+    // Use GAME_W/GAME_H if set by pyxel.init(), otherwise fall back to SCREEN_W/H
+    let w = if GAME_W > 0 { GAME_W } else { SCREEN_W };
+    let h = if GAME_H > 0 { GAME_H } else { SCREEN_H };
+    (*info).geometry.base_width   = w;
+    (*info).geometry.base_height  = h;
+    (*info).geometry.max_width    = 512; // allow large games
+    (*info).geometry.max_height   = 512;
+    (*info).geometry.aspect_ratio = w as f32 / h as f32;
     (*info).timing.fps            = f64::from(FPS);
-    // NOTE: this declares the rate libretro expects from audio_batch_cb.
-    // We are not yet feeding that callback (Pyxel/SDL2 currently renders
-    // audio directly to ALSA in headless mode, bypassing libretro's audio
-    // pipeline) — see CHANGELOG notes for v0.4.1 sound support.
-    // Pyxel's internal mixer runs at AUDIO_SAMPLE_RATE = 22050 Hz.
     (*info).timing.sample_rate    = 22050.0;
 }
 
