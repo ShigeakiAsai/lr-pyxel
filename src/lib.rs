@@ -19,6 +19,11 @@ use pyxel_core::{
     KEY_LSHIFT, KEY_RSHIFT, KEY_LCTRL, KEY_RCTRL, KEY_LALT, KEY_RALT,
     KEY_F1, KEY_F2, KEY_F3, KEY_F4, KEY_F5, KEY_F6,
     KEY_F7, KEY_F8, KEY_F9, KEY_F10, KEY_F11, KEY_F12,
+    GAMEPAD1_BUTTON_A, GAMEPAD1_BUTTON_B, GAMEPAD1_BUTTON_X, GAMEPAD1_BUTTON_Y,
+    GAMEPAD1_BUTTON_BACK, GAMEPAD1_BUTTON_START,
+    GAMEPAD1_BUTTON_LEFTSHOULDER, GAMEPAD1_BUTTON_RIGHTSHOULDER,
+    GAMEPAD1_BUTTON_DPAD_UP, GAMEPAD1_BUTTON_DPAD_DOWN,
+    GAMEPAD1_BUTTON_DPAD_LEFT, GAMEPAD1_BUTTON_DPAD_RIGHT,
 };
 
 static mut VIDEO_CB:    Option<unsafe extern "C" fn(*const c_void, c_uint, c_uint, usize)>   = None;
@@ -549,6 +554,16 @@ fn quit() {
         }
     }
 }
+
+// show() — renders one frame and waits (used in scripts without a run loop).
+// In libretro context this is a no-op: the frame is rendered by retro_run().
+#[pyfunction]
+fn show() {}
+
+// flip() — advances one frame manually (used instead of pyxel.run()).
+// In libretro context this is a no-op: framing is driven by retro_run().
+#[pyfunction]
+fn flip() {}
 #[pyfunction]
 fn width_fn() -> u32 { *pyxel_core::width() }
 #[pyfunction]
@@ -610,6 +625,8 @@ fn pyxel(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     // System
     m.add_function(wrap_pyfunction!(frame_count, m)?)?;
     m.add_function(wrap_pyfunction!(quit,        m)?)?;
+    m.add_function(wrap_pyfunction!(show,        m)?)?;
+    m.add_function(wrap_pyfunction!(flip,        m)?)?;
     m.add_function(wrap_pyfunction!(width_fn,    m)?)?;
     m.add_function(wrap_pyfunction!(height_fn,   m)?)?;
     m.add_function(wrap_pyfunction!(init,        m)?)?;
@@ -619,6 +636,28 @@ fn pyxel(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("height", *pyxel_core::height())?;
     add_key_constants(m)?;
     add_color_constants(m)?;
+
+    // Expose colors as a Python list (16 RGB24 values)
+    // pyxel.colors[n] returns the RGB value of palette entry n
+    {
+        let pal = pyxel_core::colors();
+        let color_list = pyo3::types::PyList::new_bound(_py, pal.iter().copied());
+        m.add("colors", color_list)?;
+    }
+
+    // GAMEPAD constants
+    m.add("GAMEPAD1_BUTTON_A",             pyxel_core::GAMEPAD1_BUTTON_A)?;
+    m.add("GAMEPAD1_BUTTON_B",             pyxel_core::GAMEPAD1_BUTTON_B)?;
+    m.add("GAMEPAD1_BUTTON_X",             pyxel_core::GAMEPAD1_BUTTON_X)?;
+    m.add("GAMEPAD1_BUTTON_Y",             pyxel_core::GAMEPAD1_BUTTON_Y)?;
+    m.add("GAMEPAD1_BUTTON_BACK",          pyxel_core::GAMEPAD1_BUTTON_BACK)?;
+    m.add("GAMEPAD1_BUTTON_START",         pyxel_core::GAMEPAD1_BUTTON_START)?;
+    m.add("GAMEPAD1_BUTTON_LEFTSHOULDER",  pyxel_core::GAMEPAD1_BUTTON_LEFTSHOULDER)?;
+    m.add("GAMEPAD1_BUTTON_RIGHTSHOULDER", pyxel_core::GAMEPAD1_BUTTON_RIGHTSHOULDER)?;
+    m.add("GAMEPAD1_BUTTON_DPAD_UP",       pyxel_core::GAMEPAD1_BUTTON_DPAD_UP)?;
+    m.add("GAMEPAD1_BUTTON_DPAD_DOWN",     pyxel_core::GAMEPAD1_BUTTON_DPAD_DOWN)?;
+    m.add("GAMEPAD1_BUTTON_DPAD_LEFT",     pyxel_core::GAMEPAD1_BUTTON_DPAD_LEFT)?;
+    m.add("GAMEPAD1_BUTTON_DPAD_RIGHT",    pyxel_core::GAMEPAD1_BUTTON_DPAD_RIGHT)?;
     Ok(())
 }
 
@@ -1014,24 +1053,39 @@ static mut PREV_BUTTONS: u32 = 0;
 
 unsafe fn inject_input(buttons: u32) {
     const MAP: &[(u32, u32)] = &[
-        (0, KEY_Z),
-        (1, KEY_X),
-        (3, KEY_RETURN),
-        (4, KEY_UP),
-        (5, KEY_DOWN),
-        (6, KEY_LEFT),
-        (7, KEY_RIGHT),
-        (8, KEY_A),
-        (9, KEY_S),
+        // libretro bit → Pyxel key
+        // Bit 0 = B(cross),  1 = Y(square), 2 = Select, 3 = Start
+        // Bit 4 = Up, 5 = Down, 6 = Left, 7 = Right
+        // Bit 8 = A(circle), 9 = X(triangle), 10 = L, 11 = R
+        (0,  KEY_Z),
+        (1,  KEY_X),
+        (2,  KEY_S),         // Select → KEY_S
+        (3,  KEY_RETURN),
+        (4,  KEY_UP),
+        (5,  KEY_DOWN),
+        (6,  KEY_LEFT),
+        (7,  KEY_RIGHT),
+        (8,  KEY_A),
+        (9,  KEY_S),
+        // GAMEPAD1_BUTTON_* mapping
+        (0,  GAMEPAD1_BUTTON_B),
+        (1,  GAMEPAD1_BUTTON_A),
+        (2,  GAMEPAD1_BUTTON_BACK),
+        (3,  GAMEPAD1_BUTTON_START),
+        (4,  GAMEPAD1_BUTTON_DPAD_UP),
+        (5,  GAMEPAD1_BUTTON_DPAD_DOWN),
+        (6,  GAMEPAD1_BUTTON_DPAD_LEFT),
+        (7,  GAMEPAD1_BUTTON_DPAD_RIGHT),
+        (8,  GAMEPAD1_BUTTON_A),
+        (9,  GAMEPAD1_BUTTON_X),
+        (10, GAMEPAD1_BUTTON_LEFTSHOULDER),
+        (11, GAMEPAD1_BUTTON_RIGHTSHOULDER),
     ];
     let px = pyxel_core::pyxel();
     let changed = buttons ^ PREV_BUTTONS;
     for &(bit, key) in MAP {
         let mask = 1u32 << bit;
         if changed & mask != 0 {
-            // Only call set_button_state when the state actually changed.
-            // Calling press_key() every frame while held would make btnp()
-            // fire on every frame instead of just the first.
             px.set_button_state(key, buttons & mask != 0);
         }
     }
