@@ -556,9 +556,24 @@ fn quit() {
 }
 
 // show() — renders one frame and waits (used in scripts without a run loop).
-// In libretro context this is a no-op: the frame is rendered by retro_run().
+// We cache a no-op update/draw so retro_run() keeps displaying the
+// already-rendered frame instead of falling back to the placeholder.
 #[pyfunction]
-fn show() {}
+fn show() {
+    unsafe {
+        if !PYXEL_READY { return; }
+        Python::with_gil(|py| {
+            // Create no-op lambda and cache as update/draw
+            let noop = py.eval_bound("lambda: None", None, None).unwrap();
+            if PY_UPDATE.is_none() {
+                PY_UPDATE = Some(noop.clone().into());
+            }
+            if PY_DRAW.is_none() {
+                PY_DRAW = Some(noop.into());
+            }
+        });
+    }
+}
 
 // flip() — advances one frame manually (used instead of pyxel.run()).
 // In libretro context this is a no-op: framing is driven by retro_run().
