@@ -297,9 +297,17 @@ fn init(
     let _ = (w, h, title, fps, quit_key, display_scale, capture_scale, capture_sec);
 }
 
-// run() is a no-op: frame loop is driven by retro_run()
+// run(update, draw) — caches the callbacks for the libretro frame loop.
+// In normal Pyxel this starts the event loop; here it is the hook that
+// lets class-based games (e.g. Game() → pyxel.run(self.update, self.draw))
+// register their callbacks with the core.
 #[pyfunction]
-fn run(_update: PyObject, _draw: PyObject) {}
+fn run(update: PyObject, draw: PyObject) {
+    unsafe {
+        PY_UPDATE = Some(update);
+        PY_DRAW   = Some(draw);
+    }
+}
 
 // -- key constants -----------------------------------------------------------
 
