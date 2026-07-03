@@ -33,8 +33,8 @@ static mut INPUT_STATE: Option<unsafe extern "C" fn(c_uint, c_uint, c_uint, c_ui
 static mut ENVIRON_CB:  Option<unsafe extern "C" fn(c_uint, *mut c_void) -> bool>             = None;
 
 // Screen dimensions
-const SCREEN_W: u32 = 512;
-const SCREEN_H: u32 = 512;
+const SCREEN_W: u32 = 256;
+const SCREEN_H: u32 = 256;
 const FPS: u32      = 60;
 
 // Game-requested FPS (set by pyxel.init(), default 30)
@@ -351,8 +351,8 @@ fn init(
             let geometry = rust_libretro_sys::retro_game_geometry {
                 base_width:   w,
                 base_height:  h,
-                max_width:    512,
-                max_height:   512,
+                max_width:    256,
+                max_height:   256,
                 aspect_ratio: w as f32 / h as f32,
             };
             env(37, &geometry as *const _ as *mut c_void);
@@ -788,13 +788,12 @@ pub unsafe extern "C" fn retro_get_system_info(info: *mut c_void) {
 #[no_mangle]
 pub unsafe extern "C" fn retro_get_system_av_info(info: *mut c_void) {
     let info = info as *mut rust_libretro_sys::retro_system_av_info;
-    // Use GAME_W/GAME_H if set by pyxel.init(), otherwise fall back to SCREEN_W/H
     let w = if GAME_W > 0 { GAME_W } else { SCREEN_W };
     let h = if GAME_H > 0 { GAME_H } else { SCREEN_H };
     (*info).geometry.base_width   = w;
     (*info).geometry.base_height  = h;
-    (*info).geometry.max_width    = 512; // allow large games
-    (*info).geometry.max_height   = 512;
+    (*info).geometry.max_width    = 256;
+    (*info).geometry.max_height   = 256;
     (*info).geometry.aspect_ratio = w as f32 / h as f32;
     (*info).timing.fps            = f64::from(FPS);
     (*info).timing.sample_rate    = 22050.0;
@@ -1059,6 +1058,11 @@ pub unsafe extern "C" fn retro_run() {
     if unsafe { PY_UPDATE.is_some() || PY_DRAW.is_some() } {
         if run_this_frame {
             Python::with_gil(|py| {
+                // Update frame_count attribute (reuse existing GIL)
+                if let Ok(m) = py.import_bound("pyxel") {
+                    let fc = *pyxel_core::frame_count();
+                    let _ = m.setattr("frame_count", fc);
+                }
                 if let Some(ref update) = PY_UPDATE {
                     if let Err(e) = update.call0(py) { e.print(py); }
                 }
@@ -1080,15 +1084,6 @@ pub unsafe extern "C" fn retro_run() {
 
     // 6. Inject input AFTER flip_screen() so btnp() sees a single press
     inject_input(buttons);
-
-    // Update pyxel.frame_count module attribute so scripts can use it
-    // as either pyxel.frame_count (attribute) or pyxel.frame_count() (function)
-    Python::with_gil(|py| {
-        if let Ok(m) = py.import_bound("pyxel") {
-            let fc = *pyxel_core::frame_count();
-            let _ = m.setattr("frame_count", fc);
-        }
-    });
 
     // 7. Submit framebuffer to RetroArch
     submit_pyxel_frame();
