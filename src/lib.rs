@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026-present Yasai-san
 
+use std::cmp::Ordering;
 use std::ffi::CStr;
 use std::os::raw::{c_char, c_uint, c_void};
 
@@ -554,6 +555,8 @@ fn add_module_constants(m: &Bound<'_, PyModule>) -> PyResult<()> {
 // ---------------------------------------------------------------------------
 // Math functions
 // ---------------------------------------------------------------------------
+// Math functions (math_wrapper.rs)
+// ---------------------------------------------------------------------------
 
 #[pyfunction] fn ceil(x: f32) -> i32 { pyxel_core::Pyxel::ceil(x) }
 #[pyfunction] fn floor(x: f32) -> i32 { pyxel_core::Pyxel::floor(x) }
@@ -561,16 +564,61 @@ fn add_module_constants(m: &Bound<'_, PyModule>) -> PyResult<()> {
 #[pyfunction] fn sin(deg: f32) -> f32 { pyxel_core::Pyxel::sin(deg) }
 #[pyfunction] fn cos(deg: f32) -> f32 { pyxel_core::Pyxel::cos(deg) }
 #[pyfunction] fn atan2(y: f32, x: f32) -> f32 { pyxel_core::Pyxel::atan2(y, x) }
-#[pyfunction] fn sgn(x: f32) -> f32 { if x > 0.0 { 1.0 } else if x < 0.0 { -1.0 } else { 0.0 } }
-#[pyfunction] fn clamp(x: f32, lower: f32, upper: f32) -> f32 { x.clamp(lower, upper) }
 #[pyfunction] fn rseed(seed: u32) { pyxel_core::Pyxel::random_seed(seed); }
 #[pyfunction] fn rndi(a: i32, b: i32) -> i32 { pyxel_core::Pyxel::random_int(a, b) }
 #[pyfunction] fn rndf(a: f32, b: f32) -> f32 { pyxel_core::Pyxel::random_float(a, b) }
 #[pyfunction] fn nseed(seed: u32) { pyxel_core::Pyxel::noise_seed(seed); }
 
+// clamp: returns int for int inputs, float for float inputs
 #[pyfunction]
-#[pyo3(signature = (x, y=0.0, z=0.0))]
-fn noise(x: f32, y: f32, z: f32) -> f32 { pyxel_core::Pyxel::noise(x, y, z) }
+fn clamp(
+    x: pyo3::Bound<'_, pyo3::PyAny>,
+    lower: pyo3::Bound<'_, pyo3::PyAny>,
+    upper: pyo3::Bound<'_, pyo3::PyAny>,
+) -> PyResult<Py<pyo3::PyAny>> {
+    let py = x.py();
+    if let (Ok(xi), Ok(li), Ok(ui)) = (
+        x.extract::<i64>(),
+        lower.extract::<i64>(),
+        upper.extract::<i64>(),
+    ) {
+        let (lo, hi) = if li < ui { (li, ui) } else { (ui, li) };
+        let v = xi.clamp(lo, hi);
+        return Ok(v.into_py(py));
+    }
+    let xf = x.extract::<f64>()?;
+    let lf = lower.extract::<f64>()?;
+    let uf = upper.extract::<f64>()?;
+    let (lo, hi) = if lf < uf { (lf, uf) } else { (uf, lf) };
+    Ok(xf.clamp(lo, hi).into_py(py))
+}
+
+// sgn: returns int for int inputs, float for float inputs
+#[pyfunction]
+fn sgn(x: pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<Py<pyo3::PyAny>> {
+    let py = x.py();
+    if let Ok(xi) = x.extract::<i64>() {
+        let v: i64 = match xi.cmp(&0) {
+            Ordering::Greater => 1,
+            Ordering::Less => -1,
+            Ordering::Equal => 0,
+        };
+        return Ok(v.into_py(py));
+    }
+    let xf = x.extract::<f64>()?;
+    let v: f64 = match xf.partial_cmp(&0.0) {
+        Some(Ordering::Greater) => 1.0,
+        Some(Ordering::Less) => -1.0,
+        _ => 0.0,
+    };
+    Ok(v.into_py(py))
+}
+
+#[pyfunction]
+#[pyo3(signature = (x, y=None, z=None))]
+fn noise(x: f32, y: Option<f32>, z: Option<f32>) -> f32 {
+    pyxel_core::Pyxel::noise(x, y.unwrap_or(0.0), z.unwrap_or(0.0))
+}
 
 // ---------------------------------------------------------------------------
 // Drawing functions (remaining)
