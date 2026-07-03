@@ -11,6 +11,11 @@ use pyo3::types::PyModule;
 #[allow(unused_imports)]
 use pyxel_core::{
     colors, height, init as pyxel_init, screen, width,
+    // Colors
+    COLOR_BLACK, COLOR_NAVY, COLOR_PURPLE, COLOR_GREEN, COLOR_BROWN,
+    COLOR_DARK_BLUE, COLOR_LIGHT_BLUE, COLOR_WHITE, COLOR_RED, COLOR_ORANGE,
+    COLOR_YELLOW, COLOR_LIME, COLOR_CYAN, COLOR_GRAY, COLOR_PINK, COLOR_PEACH,
+    // Keys
     KEY_0, KEY_1, KEY_2, KEY_3, KEY_4, KEY_5, KEY_6, KEY_7, KEY_8, KEY_9,
     KEY_A, KEY_B, KEY_C, KEY_D, KEY_E, KEY_F, KEY_G, KEY_H, KEY_I, KEY_J,
     KEY_K, KEY_L, KEY_M, KEY_N, KEY_O, KEY_P, KEY_Q, KEY_R, KEY_S, KEY_T,
@@ -20,11 +25,26 @@ use pyxel_core::{
     KEY_LSHIFT, KEY_RSHIFT, KEY_LCTRL, KEY_RCTRL, KEY_LALT, KEY_RALT,
     KEY_F1, KEY_F2, KEY_F3, KEY_F4, KEY_F5, KEY_F6,
     KEY_F7, KEY_F8, KEY_F9, KEY_F10, KEY_F11, KEY_F12,
+    KEY_DELETE, KEY_CAPSLOCK, KEY_INSERT, KEY_HOME, KEY_PAGEUP, KEY_END, KEY_PAGEDOWN,
+    // Mouse
+    MOUSE_POS_X, MOUSE_POS_Y, MOUSE_WHEEL_X, MOUSE_WHEEL_Y,
+    MOUSE_BUTTON_LEFT, MOUSE_BUTTON_MIDDLE, MOUSE_BUTTON_RIGHT,
+    MOUSE_BUTTON_X1, MOUSE_BUTTON_X2,
+    // Gamepad 1
+    GAMEPAD1_AXIS_LEFTX, GAMEPAD1_AXIS_LEFTY, GAMEPAD1_AXIS_RIGHTX, GAMEPAD1_AXIS_RIGHTY,
+    GAMEPAD1_AXIS_TRIGGERLEFT, GAMEPAD1_AXIS_TRIGGERRIGHT,
     GAMEPAD1_BUTTON_A, GAMEPAD1_BUTTON_B, GAMEPAD1_BUTTON_X, GAMEPAD1_BUTTON_Y,
-    GAMEPAD1_BUTTON_BACK, GAMEPAD1_BUTTON_START,
+    GAMEPAD1_BUTTON_BACK, GAMEPAD1_BUTTON_GUIDE, GAMEPAD1_BUTTON_START,
+    GAMEPAD1_BUTTON_LEFTSTICK, GAMEPAD1_BUTTON_RIGHTSTICK,
     GAMEPAD1_BUTTON_LEFTSHOULDER, GAMEPAD1_BUTTON_RIGHTSHOULDER,
     GAMEPAD1_BUTTON_DPAD_UP, GAMEPAD1_BUTTON_DPAD_DOWN,
     GAMEPAD1_BUTTON_DPAD_LEFT, GAMEPAD1_BUTTON_DPAD_RIGHT,
+    // Gamepad 2
+    GAMEPAD2_BUTTON_A, GAMEPAD2_BUTTON_B, GAMEPAD2_BUTTON_X, GAMEPAD2_BUTTON_Y,
+    GAMEPAD2_BUTTON_BACK, GAMEPAD2_BUTTON_GUIDE, GAMEPAD2_BUTTON_START,
+    GAMEPAD2_BUTTON_LEFTSHOULDER, GAMEPAD2_BUTTON_RIGHTSHOULDER,
+    GAMEPAD2_BUTTON_DPAD_UP, GAMEPAD2_BUTTON_DPAD_DOWN,
+    GAMEPAD2_BUTTON_DPAD_LEFT, GAMEPAD2_BUTTON_DPAD_RIGHT,
 };
 
 static mut VIDEO_CB:    Option<unsafe extern "C" fn(*const c_void, c_uint, c_uint, usize)>   = None;
@@ -374,90 +394,164 @@ fn run(update: PyObject, draw: PyObject) {
 
 // -- key constants -----------------------------------------------------------
 
-fn add_key_constants(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add("KEY_UP",        pyxel_core::KEY_UP)?;
-    m.add("KEY_DOWN",      pyxel_core::KEY_DOWN)?;
-    m.add("KEY_LEFT",      pyxel_core::KEY_LEFT)?;
-    m.add("KEY_RIGHT",     pyxel_core::KEY_RIGHT)?;
-    m.add("KEY_Z",         pyxel_core::KEY_Z)?;
-    m.add("KEY_X",         pyxel_core::KEY_X)?;
-    m.add("KEY_A",         pyxel_core::KEY_A)?;
-    m.add("KEY_B",         pyxel_core::KEY_B)?;
-    m.add("KEY_C",         pyxel_core::KEY_C)?;
-    m.add("KEY_D",         pyxel_core::KEY_D)?;
-    m.add("KEY_E",         pyxel_core::KEY_E)?;
-    m.add("KEY_F",         pyxel_core::KEY_F)?;
-    m.add("KEY_G",         pyxel_core::KEY_G)?;
-    m.add("KEY_H",         pyxel_core::KEY_H)?;
-    m.add("KEY_I",         pyxel_core::KEY_I)?;
-    m.add("KEY_J",         pyxel_core::KEY_J)?;
-    m.add("KEY_K",         pyxel_core::KEY_K)?;
-    m.add("KEY_L",         pyxel_core::KEY_L)?;
-    m.add("KEY_M",         pyxel_core::KEY_M)?;
-    m.add("KEY_N",         pyxel_core::KEY_N)?;
-    m.add("KEY_O",         pyxel_core::KEY_O)?;
-    m.add("KEY_P",         pyxel_core::KEY_P)?;
-    m.add("KEY_Q",         pyxel_core::KEY_Q)?;
-    m.add("KEY_R",         pyxel_core::KEY_R)?;
-    m.add("KEY_S",         pyxel_core::KEY_S)?;
-    m.add("KEY_T",         pyxel_core::KEY_T)?;
-    m.add("KEY_U",         pyxel_core::KEY_U)?;
-    m.add("KEY_V",         pyxel_core::KEY_V)?;
-    m.add("KEY_W",         pyxel_core::KEY_W)?;
-    m.add("KEY_Y",         pyxel_core::KEY_Y)?;
-    m.add("KEY_RETURN",    pyxel_core::KEY_RETURN)?;
-    m.add("KEY_ESCAPE",    pyxel_core::KEY_ESCAPE)?;
-    m.add("KEY_SPACE",     pyxel_core::KEY_SPACE)?;
-    m.add("KEY_BACKSPACE", pyxel_core::KEY_BACKSPACE)?;
-    m.add("KEY_TAB",       pyxel_core::KEY_TAB)?;
-    m.add("KEY_LSHIFT",    pyxel_core::KEY_LSHIFT)?;
-    m.add("KEY_RSHIFT",    pyxel_core::KEY_RSHIFT)?;
-    m.add("KEY_LCTRL",     pyxel_core::KEY_LCTRL)?;
-    m.add("KEY_RCTRL",     pyxel_core::KEY_RCTRL)?;
-    m.add("KEY_LALT",      pyxel_core::KEY_LALT)?;
-    m.add("KEY_RALT",      pyxel_core::KEY_RALT)?;
-    m.add("KEY_0",         pyxel_core::KEY_0)?;
-    m.add("KEY_1",         pyxel_core::KEY_1)?;
-    m.add("KEY_2",         pyxel_core::KEY_2)?;
-    m.add("KEY_3",         pyxel_core::KEY_3)?;
-    m.add("KEY_4",         pyxel_core::KEY_4)?;
-    m.add("KEY_5",         pyxel_core::KEY_5)?;
-    m.add("KEY_6",         pyxel_core::KEY_6)?;
-    m.add("KEY_7",         pyxel_core::KEY_7)?;
-    m.add("KEY_8",         pyxel_core::KEY_8)?;
-    m.add("KEY_9",         pyxel_core::KEY_9)?;
-    m.add("KEY_F1",        pyxel_core::KEY_F1)?;
-    m.add("KEY_F2",        pyxel_core::KEY_F2)?;
-    m.add("KEY_F3",        pyxel_core::KEY_F3)?;
-    m.add("KEY_F4",        pyxel_core::KEY_F4)?;
-    m.add("KEY_F5",        pyxel_core::KEY_F5)?;
-    m.add("KEY_F6",        pyxel_core::KEY_F6)?;
-    m.add("KEY_F7",        pyxel_core::KEY_F7)?;
-    m.add("KEY_F8",        pyxel_core::KEY_F8)?;
-    m.add("KEY_F9",        pyxel_core::KEY_F9)?;
-    m.add("KEY_F10",       pyxel_core::KEY_F10)?;
-    m.add("KEY_F11",       pyxel_core::KEY_F11)?;
-    m.add("KEY_F12",       pyxel_core::KEY_F12)?;
-    Ok(())
-}
-
-fn add_color_constants(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add("COLOR_BLACK",      0u8)?;
-    m.add("COLOR_NAVY",       1u8)?;
-    m.add("COLOR_PURPLE",     2u8)?;
-    m.add("COLOR_GREEN",      3u8)?;
-    m.add("COLOR_BROWN",      4u8)?;
-    m.add("COLOR_DARK_BLUE",  5u8)?;
-    m.add("COLOR_LIGHT_BLUE", 6u8)?;
-    m.add("COLOR_WHITE",      7u8)?;
-    m.add("COLOR_RED",        8u8)?;
-    m.add("COLOR_ORANGE",     9u8)?;
-    m.add("COLOR_YELLOW",    10u8)?;
-    m.add("COLOR_LIME",      11u8)?;
-    m.add("COLOR_CYAN",      12u8)?;
-    m.add("COLOR_GRAY",      13u8)?;
-    m.add("COLOR_PINK",      14u8)?;
-    m.add("COLOR_PEACH",     15u8)?;
+fn add_module_constants(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    // Graphics
+    m.add("NUM_COLORS",      pyxel_core::NUM_COLORS)?;
+    m.add("NUM_IMAGES",      pyxel_core::NUM_IMAGES)?;
+    m.add("IMAGE_SIZE",      pyxel_core::IMAGE_SIZE)?;
+    m.add("NUM_TILEMAPS",    pyxel_core::NUM_TILEMAPS)?;
+    m.add("TILEMAP_SIZE",    pyxel_core::TILEMAP_SIZE)?;
+    m.add("TILE_SIZE",       pyxel_core::TILE_SIZE)?;
+    m.add("COLOR_BLACK",     pyxel_core::COLOR_BLACK)?;
+    m.add("COLOR_NAVY",      pyxel_core::COLOR_NAVY)?;
+    m.add("COLOR_PURPLE",    pyxel_core::COLOR_PURPLE)?;
+    m.add("COLOR_GREEN",     pyxel_core::COLOR_GREEN)?;
+    m.add("COLOR_BROWN",     pyxel_core::COLOR_BROWN)?;
+    m.add("COLOR_DARK_BLUE", pyxel_core::COLOR_DARK_BLUE)?;
+    m.add("COLOR_LIGHT_BLUE",pyxel_core::COLOR_LIGHT_BLUE)?;
+    m.add("COLOR_WHITE",     pyxel_core::COLOR_WHITE)?;
+    m.add("COLOR_RED",       pyxel_core::COLOR_RED)?;
+    m.add("COLOR_ORANGE",    pyxel_core::COLOR_ORANGE)?;
+    m.add("COLOR_YELLOW",    pyxel_core::COLOR_YELLOW)?;
+    m.add("COLOR_LIME",      pyxel_core::COLOR_LIME)?;
+    m.add("COLOR_CYAN",      pyxel_core::COLOR_CYAN)?;
+    m.add("COLOR_GRAY",      pyxel_core::COLOR_GRAY)?;
+    m.add("COLOR_PINK",      pyxel_core::COLOR_PINK)?;
+    m.add("COLOR_PEACH",     pyxel_core::COLOR_PEACH)?;
+    m.add("FONT_WIDTH",      pyxel_core::FONT_WIDTH)?;
+    m.add("FONT_HEIGHT",     pyxel_core::FONT_HEIGHT)?;
+    // Audio
+    m.add("NUM_CHANNELS",          pyxel_core::NUM_CHANNELS)?;
+    m.add("NUM_TONES",             pyxel_core::NUM_TONES)?;
+    m.add("NUM_SOUNDS",            pyxel_core::NUM_SOUNDS)?;
+    m.add("NUM_MUSICS",            pyxel_core::NUM_MUSICS)?;
+    m.add("TONE_TRIANGLE",         pyxel_core::TONE_TRIANGLE)?;
+    m.add("TONE_SQUARE",           pyxel_core::TONE_SQUARE)?;
+    m.add("TONE_PULSE",            pyxel_core::TONE_PULSE)?;
+    m.add("TONE_NOISE",            pyxel_core::TONE_NOISE)?;
+    m.add("EFFECT_NONE",           pyxel_core::EFFECT_NONE)?;
+    m.add("EFFECT_SLIDE",          pyxel_core::EFFECT_SLIDE)?;
+    m.add("EFFECT_VIBRATO",        pyxel_core::EFFECT_VIBRATO)?;
+    m.add("EFFECT_FADEOUT",        pyxel_core::EFFECT_FADEOUT)?;
+    m.add("EFFECT_HALF_FADEOUT",   pyxel_core::EFFECT_HALF_FADEOUT)?;
+    m.add("EFFECT_QUARTER_FADEOUT",pyxel_core::EFFECT_QUARTER_FADEOUT)?;
+    // Keyboard
+    m.add("KEY_BACKSPACE",   pyxel_core::KEY_BACKSPACE)?;
+    m.add("KEY_TAB",         pyxel_core::KEY_TAB)?;
+    m.add("KEY_RETURN",      pyxel_core::KEY_RETURN)?;
+    m.add("KEY_ESCAPE",      pyxel_core::KEY_ESCAPE)?;
+    m.add("KEY_SPACE",       pyxel_core::KEY_SPACE)?;
+    m.add("KEY_0",           pyxel_core::KEY_0)?;
+    m.add("KEY_1",           pyxel_core::KEY_1)?;
+    m.add("KEY_2",           pyxel_core::KEY_2)?;
+    m.add("KEY_3",           pyxel_core::KEY_3)?;
+    m.add("KEY_4",           pyxel_core::KEY_4)?;
+    m.add("KEY_5",           pyxel_core::KEY_5)?;
+    m.add("KEY_6",           pyxel_core::KEY_6)?;
+    m.add("KEY_7",           pyxel_core::KEY_7)?;
+    m.add("KEY_8",           pyxel_core::KEY_8)?;
+    m.add("KEY_9",           pyxel_core::KEY_9)?;
+    m.add("KEY_A",           pyxel_core::KEY_A)?;
+    m.add("KEY_B",           pyxel_core::KEY_B)?;
+    m.add("KEY_C",           pyxel_core::KEY_C)?;
+    m.add("KEY_D",           pyxel_core::KEY_D)?;
+    m.add("KEY_E",           pyxel_core::KEY_E)?;
+    m.add("KEY_F",           pyxel_core::KEY_F)?;
+    m.add("KEY_G",           pyxel_core::KEY_G)?;
+    m.add("KEY_H",           pyxel_core::KEY_H)?;
+    m.add("KEY_I",           pyxel_core::KEY_I)?;
+    m.add("KEY_J",           pyxel_core::KEY_J)?;
+    m.add("KEY_K",           pyxel_core::KEY_K)?;
+    m.add("KEY_L",           pyxel_core::KEY_L)?;
+    m.add("KEY_M",           pyxel_core::KEY_M)?;
+    m.add("KEY_N",           pyxel_core::KEY_N)?;
+    m.add("KEY_O",           pyxel_core::KEY_O)?;
+    m.add("KEY_P",           pyxel_core::KEY_P)?;
+    m.add("KEY_Q",           pyxel_core::KEY_Q)?;
+    m.add("KEY_R",           pyxel_core::KEY_R)?;
+    m.add("KEY_S",           pyxel_core::KEY_S)?;
+    m.add("KEY_T",           pyxel_core::KEY_T)?;
+    m.add("KEY_U",           pyxel_core::KEY_U)?;
+    m.add("KEY_V",           pyxel_core::KEY_V)?;
+    m.add("KEY_W",           pyxel_core::KEY_W)?;
+    m.add("KEY_X",           pyxel_core::KEY_X)?;
+    m.add("KEY_Y",           pyxel_core::KEY_Y)?;
+    m.add("KEY_Z",           pyxel_core::KEY_Z)?;
+    m.add("KEY_DELETE",      pyxel_core::KEY_DELETE)?;
+    m.add("KEY_CAPSLOCK",    pyxel_core::KEY_CAPSLOCK)?;
+    m.add("KEY_F1",          pyxel_core::KEY_F1)?;
+    m.add("KEY_F2",          pyxel_core::KEY_F2)?;
+    m.add("KEY_F3",          pyxel_core::KEY_F3)?;
+    m.add("KEY_F4",          pyxel_core::KEY_F4)?;
+    m.add("KEY_F5",          pyxel_core::KEY_F5)?;
+    m.add("KEY_F6",          pyxel_core::KEY_F6)?;
+    m.add("KEY_F7",          pyxel_core::KEY_F7)?;
+    m.add("KEY_F8",          pyxel_core::KEY_F8)?;
+    m.add("KEY_F9",          pyxel_core::KEY_F9)?;
+    m.add("KEY_F10",         pyxel_core::KEY_F10)?;
+    m.add("KEY_F11",         pyxel_core::KEY_F11)?;
+    m.add("KEY_F12",         pyxel_core::KEY_F12)?;
+    m.add("KEY_INSERT",      pyxel_core::KEY_INSERT)?;
+    m.add("KEY_HOME",        pyxel_core::KEY_HOME)?;
+    m.add("KEY_PAGEUP",      pyxel_core::KEY_PAGEUP)?;
+    m.add("KEY_END",         pyxel_core::KEY_END)?;
+    m.add("KEY_PAGEDOWN",    pyxel_core::KEY_PAGEDOWN)?;
+    m.add("KEY_RIGHT",       pyxel_core::KEY_RIGHT)?;
+    m.add("KEY_LEFT",        pyxel_core::KEY_LEFT)?;
+    m.add("KEY_DOWN",        pyxel_core::KEY_DOWN)?;
+    m.add("KEY_UP",          pyxel_core::KEY_UP)?;
+    m.add("KEY_LCTRL",       pyxel_core::KEY_LCTRL)?;
+    m.add("KEY_LSHIFT",      pyxel_core::KEY_LSHIFT)?;
+    m.add("KEY_LALT",        pyxel_core::KEY_LALT)?;
+    m.add("KEY_RCTRL",       pyxel_core::KEY_RCTRL)?;
+    m.add("KEY_RSHIFT",      pyxel_core::KEY_RSHIFT)?;
+    m.add("KEY_RALT",        pyxel_core::KEY_RALT)?;
+    // Mouse
+    m.add("MOUSE_POS_X",          pyxel_core::MOUSE_POS_X)?;
+    m.add("MOUSE_POS_Y",          pyxel_core::MOUSE_POS_Y)?;
+    m.add("MOUSE_WHEEL_X",        pyxel_core::MOUSE_WHEEL_X)?;
+    m.add("MOUSE_WHEEL_Y",        pyxel_core::MOUSE_WHEEL_Y)?;
+    m.add("MOUSE_BUTTON_LEFT",    pyxel_core::MOUSE_BUTTON_LEFT)?;
+    m.add("MOUSE_BUTTON_MIDDLE",  pyxel_core::MOUSE_BUTTON_MIDDLE)?;
+    m.add("MOUSE_BUTTON_RIGHT",   pyxel_core::MOUSE_BUTTON_RIGHT)?;
+    m.add("MOUSE_BUTTON_X1",      pyxel_core::MOUSE_BUTTON_X1)?;
+    m.add("MOUSE_BUTTON_X2",      pyxel_core::MOUSE_BUTTON_X2)?;
+    // Gamepad 1
+    m.add("GAMEPAD1_AXIS_LEFTX",        pyxel_core::GAMEPAD1_AXIS_LEFTX)?;
+    m.add("GAMEPAD1_AXIS_LEFTY",        pyxel_core::GAMEPAD1_AXIS_LEFTY)?;
+    m.add("GAMEPAD1_AXIS_RIGHTX",       pyxel_core::GAMEPAD1_AXIS_RIGHTX)?;
+    m.add("GAMEPAD1_AXIS_RIGHTY",       pyxel_core::GAMEPAD1_AXIS_RIGHTY)?;
+    m.add("GAMEPAD1_AXIS_TRIGGERLEFT",  pyxel_core::GAMEPAD1_AXIS_TRIGGERLEFT)?;
+    m.add("GAMEPAD1_AXIS_TRIGGERRIGHT", pyxel_core::GAMEPAD1_AXIS_TRIGGERRIGHT)?;
+    m.add("GAMEPAD1_BUTTON_A",             pyxel_core::GAMEPAD1_BUTTON_A)?;
+    m.add("GAMEPAD1_BUTTON_B",             pyxel_core::GAMEPAD1_BUTTON_B)?;
+    m.add("GAMEPAD1_BUTTON_X",             pyxel_core::GAMEPAD1_BUTTON_X)?;
+    m.add("GAMEPAD1_BUTTON_Y",             pyxel_core::GAMEPAD1_BUTTON_Y)?;
+    m.add("GAMEPAD1_BUTTON_BACK",          pyxel_core::GAMEPAD1_BUTTON_BACK)?;
+    m.add("GAMEPAD1_BUTTON_GUIDE",         pyxel_core::GAMEPAD1_BUTTON_GUIDE)?;
+    m.add("GAMEPAD1_BUTTON_START",         pyxel_core::GAMEPAD1_BUTTON_START)?;
+    m.add("GAMEPAD1_BUTTON_LEFTSTICK",     pyxel_core::GAMEPAD1_BUTTON_LEFTSTICK)?;
+    m.add("GAMEPAD1_BUTTON_RIGHTSTICK",    pyxel_core::GAMEPAD1_BUTTON_RIGHTSTICK)?;
+    m.add("GAMEPAD1_BUTTON_LEFTSHOULDER",  pyxel_core::GAMEPAD1_BUTTON_LEFTSHOULDER)?;
+    m.add("GAMEPAD1_BUTTON_RIGHTSHOULDER", pyxel_core::GAMEPAD1_BUTTON_RIGHTSHOULDER)?;
+    m.add("GAMEPAD1_BUTTON_DPAD_UP",       pyxel_core::GAMEPAD1_BUTTON_DPAD_UP)?;
+    m.add("GAMEPAD1_BUTTON_DPAD_DOWN",     pyxel_core::GAMEPAD1_BUTTON_DPAD_DOWN)?;
+    m.add("GAMEPAD1_BUTTON_DPAD_LEFT",     pyxel_core::GAMEPAD1_BUTTON_DPAD_LEFT)?;
+    m.add("GAMEPAD1_BUTTON_DPAD_RIGHT",    pyxel_core::GAMEPAD1_BUTTON_DPAD_RIGHT)?;
+    // Gamepad 2
+    m.add("GAMEPAD2_BUTTON_A",             pyxel_core::GAMEPAD2_BUTTON_A)?;
+    m.add("GAMEPAD2_BUTTON_B",             pyxel_core::GAMEPAD2_BUTTON_B)?;
+    m.add("GAMEPAD2_BUTTON_X",             pyxel_core::GAMEPAD2_BUTTON_X)?;
+    m.add("GAMEPAD2_BUTTON_Y",             pyxel_core::GAMEPAD2_BUTTON_Y)?;
+    m.add("GAMEPAD2_BUTTON_BACK",          pyxel_core::GAMEPAD2_BUTTON_BACK)?;
+    m.add("GAMEPAD2_BUTTON_GUIDE",         pyxel_core::GAMEPAD2_BUTTON_GUIDE)?;
+    m.add("GAMEPAD2_BUTTON_START",         pyxel_core::GAMEPAD2_BUTTON_START)?;
+    m.add("GAMEPAD2_BUTTON_LEFTSHOULDER",  pyxel_core::GAMEPAD2_BUTTON_LEFTSHOULDER)?;
+    m.add("GAMEPAD2_BUTTON_RIGHTSHOULDER", pyxel_core::GAMEPAD2_BUTTON_RIGHTSHOULDER)?;
+    m.add("GAMEPAD2_BUTTON_DPAD_UP",       pyxel_core::GAMEPAD2_BUTTON_DPAD_UP)?;
+    m.add("GAMEPAD2_BUTTON_DPAD_DOWN",     pyxel_core::GAMEPAD2_BUTTON_DPAD_DOWN)?;
+    m.add("GAMEPAD2_BUTTON_DPAD_LEFT",     pyxel_core::GAMEPAD2_BUTTON_DPAD_LEFT)?;
+    m.add("GAMEPAD2_BUTTON_DPAD_RIGHT",    pyxel_core::GAMEPAD2_BUTTON_DPAD_RIGHT)?;
     Ok(())
 }
 
@@ -977,8 +1071,7 @@ fn pyxel(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     // width/height as module attributes
     m.add("width",  *pyxel_core::width())?;
     m.add("height", *pyxel_core::height())?;
-    add_key_constants(m)?;
-    add_color_constants(m)?;
+    add_module_constants(m)?;
 
     // Expose colors as a Python list (16 RGB24 values)
     // pyxel.colors[n] returns the RGB value of palette entry n
