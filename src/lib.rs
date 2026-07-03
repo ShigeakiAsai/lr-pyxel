@@ -774,10 +774,6 @@ fn resize(width: u32, height: u32) -> PyResult<()> {
     }
     Ok(())
 }
-#[pyfunction]
-fn width_fn() -> u32 { *pyxel_core::width() }
-#[pyfunction]
-fn height_fn() -> u32 { *pyxel_core::height() }
 
 // -- module registration -----------------------------------------------------
 
