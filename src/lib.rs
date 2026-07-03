@@ -717,6 +717,36 @@ fn mouse(visible: bool) {
     unsafe { if PYXEL_READY { pyxel_core::pyxel().set_mouse_visible(visible); } }
 }
 
+#[pyfunction]
+fn set_btn(key: u32, state: bool) {
+    unsafe { if PYXEL_READY { pyxel_core::pyxel().set_button_state(key, state); } }
+}
+
+#[pyfunction]
+fn set_btnv(key: u32, val: i32) {
+    unsafe { if PYXEL_READY { pyxel_core::pyxel().set_button_value(key, val); } }
+}
+
+#[pyfunction]
+fn set_mouse_pos(x: f32, y: f32) {
+    unsafe { if PYXEL_READY { pyxel_core::pyxel().set_mouse_position(x, y); } }
+}
+
+#[pyfunction]
+fn set_input_text(text: &str) {
+    unsafe { if PYXEL_READY { pyxel_core::pyxel().set_input_text(text); } }
+}
+
+#[pyfunction]
+fn set_dropped_files(files: Vec<String>) {
+    unsafe {
+        if PYXEL_READY {
+            let refs: Vec<&str> = files.iter().map(String::as_str).collect();
+            pyxel_core::pyxel().set_dropped_files(&refs);
+        }
+    }
+}
+
 
 
 // ---------------------------------------------------------------------------
@@ -1167,9 +1197,14 @@ fn pyxel(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Input
     m.add_function(wrap_pyfunction!(btn,         m)?)?;
     m.add_function(wrap_pyfunction!(btnp,        m)?)?;
-    m.add_function(wrap_pyfunction!(btnr,        m)?)?;
-    m.add_function(wrap_pyfunction!(btnv,        m)?)?;
-    m.add_function(wrap_pyfunction!(mouse,       m)?)?;
+    m.add_function(wrap_pyfunction!(btnr,             m)?)?;
+    m.add_function(wrap_pyfunction!(btnv,             m)?)?;
+    m.add_function(wrap_pyfunction!(mouse,            m)?)?;
+    m.add_function(wrap_pyfunction!(set_btn,          m)?)?;
+    m.add_function(wrap_pyfunction!(set_btnv,         m)?)?;
+    m.add_function(wrap_pyfunction!(set_mouse_pos,    m)?)?;
+    m.add_function(wrap_pyfunction!(set_input_text,   m)?)?;
+    m.add_function(wrap_pyfunction!(set_dropped_files,m)?)?;
     // Audio
     m.add_function(wrap_pyfunction!(sound_set,   m)?)?;
     m.add_function(wrap_pyfunction!(play,        m)?)?;
