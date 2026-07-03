@@ -737,6 +737,17 @@ impl PySound {
                 .map_err(pyo3::exceptions::PyValueError::new_err)
         }
     }
+
+    fn mml(&self, code: &str) -> PyResult<()> {
+        unsafe {
+            if !PYXEL_READY { return Ok(()); }
+            let snds = pyxel_core::sounds();
+            let rc = &snds[self.bank];
+            let snd = &mut *rc.get();
+            snd.set_mml(code)
+                .map_err(pyo3::exceptions::PyValueError::new_err)
+        }
+    }
 }
 
 #[pyclass(name = "SoundList")]
