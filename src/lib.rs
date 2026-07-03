@@ -33,8 +33,8 @@ static mut INPUT_STATE: Option<unsafe extern "C" fn(c_uint, c_uint, c_uint, c_ui
 static mut ENVIRON_CB:  Option<unsafe extern "C" fn(c_uint, *mut c_void) -> bool>             = None;
 
 // Screen dimensions
-const SCREEN_W: u32 = 256;
-const SCREEN_H: u32 = 256;
+const SCREEN_W: u32 = 128;
+const SCREEN_H: u32 = 128;
 const FPS: u32      = 60;
 
 // Game-requested FPS (set by pyxel.init(), default 30)
@@ -828,7 +828,8 @@ pub unsafe extern "C" fn retro_init() {
     );
 
     // Initialize BlipBuf for audio rendering
-    let mut blip = blip_buf::BlipBuf::new(AUDIO_SAMPLES_PER_FRAME as u32 * 2);
+    // Use 1024 to accommodate both 30fps (735 samples) and 60fps (368 samples)
+    let mut blip = blip_buf::BlipBuf::new(1024);
     blip.set_rates(
         pyxel_core::AUDIO_CLOCK_RATE as f64,
         pyxel_core::AUDIO_SAMPLE_RATE as f64,
