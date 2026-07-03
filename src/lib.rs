@@ -709,6 +709,71 @@ fn show() {
 // In libretro context this is a no-op: framing is driven by retro_run().
 #[pyfunction]
 fn flip() {}
+
+// system_wrapper.rs additions
+// Window/display settings are no-ops in headless libretro mode
+
+#[pyfunction]
+fn reset() {
+    // In libretro, reset = reload current content
+    // For now this is a no-op; future: trigger RETRO_ENVIRONMENT_RESET
+}
+
+#[pyfunction]
+fn title(_title: &str) {
+    // no-op in headless mode
+}
+
+#[pyfunction]
+#[pyo3(signature = (data, scale, colkey=None))]
+fn icon(data: Vec<String>, scale: u32, colkey: Option<u8>) {
+    let _ = (data, scale, colkey);
+    // no-op in headless mode
+}
+
+#[pyfunction]
+fn perf_monitor(_enabled: bool) {
+    // no-op in headless mode
+}
+
+#[pyfunction]
+fn integer_scale(_enabled: bool) {
+    // no-op in headless mode
+}
+
+#[pyfunction]
+fn screen_mode(_scr: u32) {
+    // no-op in headless mode
+}
+
+#[pyfunction]
+fn fullscreen(_enabled: bool) {
+    // no-op in headless mode
+}
+
+#[pyfunction]
+fn resize(width: u32, height: u32) -> PyResult<()> {
+    if width == 0 || height == 0 {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "width and height must be greater than 0",
+        ));
+    }
+    unsafe {
+        GAME_W = width;
+        GAME_H = height;
+        if let Some(env) = ENVIRON_CB {
+            let geometry = rust_libretro_sys::retro_game_geometry {
+                base_width:   width,
+                base_height:  height,
+                max_width:    256,
+                max_height:   256,
+                aspect_ratio: width as f32 / height as f32,
+            };
+            env(37, &geometry as *const _ as *mut c_void);
+        }
+    }
+    Ok(())
+}
 #[pyfunction]
 fn width_fn() -> u32 { *pyxel_core::width() }
 #[pyfunction]
@@ -1080,14 +1145,20 @@ fn pyxel(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(rndf,        m)?)?;
     m.add_function(wrap_pyfunction!(nseed,       m)?)?;
     m.add_function(wrap_pyfunction!(noise,       m)?)?;
-    // System
-    m.add_function(wrap_pyfunction!(quit,        m)?)?;
-    m.add_function(wrap_pyfunction!(show,        m)?)?;
-    m.add_function(wrap_pyfunction!(flip,        m)?)?;
-    m.add_function(wrap_pyfunction!(width_fn,    m)?)?;
-    m.add_function(wrap_pyfunction!(height_fn,   m)?)?;
-    m.add_function(wrap_pyfunction!(init,        m)?)?;
-    m.add_function(wrap_pyfunction!(run,         m)?)?;
+    // System (system_wrapper.rs)
+    m.add_function(wrap_pyfunction!(quit,         m)?)?;
+    m.add_function(wrap_pyfunction!(reset,        m)?)?;
+    m.add_function(wrap_pyfunction!(show,         m)?)?;
+    m.add_function(wrap_pyfunction!(flip,         m)?)?;
+    m.add_function(wrap_pyfunction!(title,        m)?)?;
+    m.add_function(wrap_pyfunction!(icon,         m)?)?;
+    m.add_function(wrap_pyfunction!(perf_monitor, m)?)?;
+    m.add_function(wrap_pyfunction!(integer_scale,m)?)?;
+    m.add_function(wrap_pyfunction!(screen_mode,  m)?)?;
+    m.add_function(wrap_pyfunction!(fullscreen,   m)?)?;
+    m.add_function(wrap_pyfunction!(resize,       m)?)?;
+    m.add_function(wrap_pyfunction!(init,         m)?)?;
+    m.add_function(wrap_pyfunction!(run,          m)?)?;
     // width/height as module attributes
     // Dynamic variables via __getattr__ (variable_wrapper.rs approach)
     // width, height, frame_count, mouse_x/y, colors, images, tilemaps,
