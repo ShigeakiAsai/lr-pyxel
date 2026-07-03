@@ -579,6 +579,16 @@ fn mouse(visible: bool) {
     unsafe { if PYXEL_READY { pyxel_core::pyxel().set_mouse_visible(visible); } }
 }
 
+#[pyfunction]
+fn mouse_x() -> i32 {
+    *pyxel_core::mouse_x()
+}
+
+#[pyfunction]
+fn mouse_y() -> i32 {
+    *pyxel_core::mouse_y()
+}
+
 // ---------------------------------------------------------------------------
 // System functions (remaining)
 // ---------------------------------------------------------------------------
@@ -766,6 +776,103 @@ impl PySoundList {
 }
 
 // ---------------------------------------------------------------------------
+// Tilemap bank wrapper (pyxel.tilemaps[n])
+// ---------------------------------------------------------------------------
+
+#[pyclass(name = "Tilemap")]
+struct PyTilemap {
+    bank: usize,
+}
+
+#[pymethods]
+impl PyTilemap {
+    fn set(&self, x: i32, y: i32, data: Vec<String>) -> PyResult<()> {
+        unsafe {
+            if !PYXEL_READY { return Ok(()); }
+            let tms = pyxel_core::tilemaps();
+            let rc = &tms[self.bank];
+            let tm = &mut *rc.get();
+            let data_refs: Vec<&str> = data.iter().map(|s| s.as_str()).collect();
+            tm.set(x, y, &data_refs);
+            Ok(())
+        }
+    }
+
+    #[getter]
+    fn imgsrc(&self) -> u32 {
+        unsafe {
+            if !PYXEL_READY { return 0; }
+            let tms = pyxel_core::tilemaps();
+            let rc = &tms[self.bank];
+            let tm = &*rc.get();
+            match &tm.imgsrc {
+                pyxel_core::ImageSource::Index(i) => *i,
+                _ => 0,
+            }
+        }
+    }
+
+    #[setter]
+    fn set_imgsrc(&self, idx: u32) {
+        unsafe {
+            if !PYXEL_READY { return; }
+            let tms = pyxel_core::tilemaps();
+            let rc = &tms[self.bank];
+            let tm = &mut *rc.get();
+            tm.imgsrc = pyxel_core::ImageSource::Index(idx);
+        }
+    }
+
+    fn pget(&self, x: f32, y: f32) -> (u16, u16) {
+        unsafe {
+            if !PYXEL_READY { return (0, 0); }
+            let tms = pyxel_core::tilemaps();
+            let rc = &tms[self.bank];
+            let tm = &*rc.get();
+            tm.tile(x, y)
+        }
+    }
+
+    fn pset(&self, x: f32, y: f32, tile: (u16, u16)) {
+        unsafe {
+            if !PYXEL_READY { return; }
+            let tms = pyxel_core::tilemaps();
+            let rc = &tms[self.bank];
+            let tm = &mut *rc.get();
+            tm.set_tile(x, y, tile);
+        }
+    }
+
+    #[pyo3(signature = (x, y, tm, u, v, w, h))]
+    fn blt(&self, x: f32, y: f32, tm: usize, u: f32, v: f32, w: f32, h: f32) -> PyResult<()> {
+        unsafe {
+            if !PYXEL_READY { return Ok(()); }
+            let tms = pyxel_core::tilemaps();
+            let src_rc = &tms[tm];
+            let dst_rc = &tms[self.bank];
+            let dst = &mut *dst_rc.get();
+            dst.draw_tilemap(x, y, src_rc, u, v, w, h, None, None, None);
+            Ok(())
+        }
+    }
+}
+
+#[pyclass(name = "TilemapList")]
+struct PyTilemapList;
+
+#[pymethods]
+impl PyTilemapList {
+    fn __getitem__(&self, idx: usize) -> PyResult<PyTilemap> {
+        if idx >= pyxel_core::NUM_TILEMAPS as usize {
+            return Err(pyo3::exceptions::PyIndexError::new_err(
+                format!("tilemap bank index {idx} out of range")
+            ));
+        }
+        Ok(PyTilemap { bank: idx })
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Music bank wrapper (pyxel.musics[n])
 // ---------------------------------------------------------------------------
 
@@ -837,6 +944,8 @@ fn pyxel(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(btnr,        m)?)?;
     m.add_function(wrap_pyfunction!(btnv,        m)?)?;
     m.add_function(wrap_pyfunction!(mouse,       m)?)?;
+    m.add_function(wrap_pyfunction!(mouse_x,     m)?)?;
+    m.add_function(wrap_pyfunction!(mouse_y,     m)?)?;
     // Audio
     m.add_function(wrap_pyfunction!(sound_set,   m)?)?;
     m.add_function(wrap_pyfunction!(play,        m)?)?;
@@ -903,13 +1012,15 @@ fn pyxel(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("NUM_SOUNDS",   pyxel_core::NUM_SOUNDS)?;
     m.add("NUM_MUSICS",   pyxel_core::NUM_MUSICS)?;
 
-    // Image/Sound/Music bank accessors
-    m.add("images", PyImageList)?;
-    m.add("sounds", PySoundList)?;
-    m.add("musics", PyMusicList)?;
+    // Image/Sound/Music/Tilemap bank accessors
+    m.add("images",   PyImageList)?;
+    m.add("sounds",   PySoundList)?;
+    m.add("musics",   PyMusicList)?;
+    m.add("tilemaps", PyTilemapList)?;
     m.add_class::<PyImage>()?;
     m.add_class::<PySound>()?;
     m.add_class::<PyMusic>()?;
+    m.add_class::<PyTilemap>()?;
 
     Ok(())
 }
