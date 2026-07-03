@@ -269,28 +269,111 @@ fn image_pset(bank: usize, x: f32, y: f32, color: u8) -> PyResult<()> {
     }
 }
 
-// load(filename, excl_images=False, excl_tilemaps=False, excl_sounds=False, excl_musics=False)
-// Loads a .pyxres resource file into the current Pyxel session.
+// ---------------------------------------------------------------------------
+// Resource functions (resource_wrapper.rs)
+// ---------------------------------------------------------------------------
+
 #[pyfunction]
-#[pyo3(signature = (filename, excl_images=false, excl_tilemaps=false, excl_sounds=false, excl_musics=false))]
+#[pyo3(signature = (filename, exclude_images=None, exclude_tilemaps=None, exclude_sounds=None, exclude_musics=None, excl_images=None, excl_tilemaps=None, excl_sounds=None, excl_musics=None))]
+#[allow(clippy::too_many_arguments)]
 fn load(
     filename: &str,
-    excl_images: bool,
-    excl_tilemaps: bool,
-    excl_sounds: bool,
-    excl_musics: bool,
+    exclude_images: Option<bool>,
+    exclude_tilemaps: Option<bool>,
+    exclude_sounds: Option<bool>,
+    exclude_musics: Option<bool>,
+    excl_images: Option<bool>,
+    excl_tilemaps: Option<bool>,
+    excl_sounds: Option<bool>,
+    excl_musics: Option<bool>,
 ) -> PyResult<()> {
     unsafe {
         if !PYXEL_READY { return Ok(()); }
+        let ei = excl_images.or(exclude_images);
+        let et = excl_tilemaps.or(exclude_tilemaps);
+        let es = excl_sounds.or(exclude_sounds);
+        let em = excl_musics.or(exclude_musics);
         pyxel_core::pyxel()
-            .load_resource(
-                filename,
-                Some(excl_images),
-                Some(excl_tilemaps),
-                Some(excl_sounds),
-                Some(excl_musics),
-            )
-            .map_err(pyo3::exceptions::PyOSError::new_err)
+            .load_resource(filename, ei, et, es, em)
+            .map_err(pyo3::exceptions::PyException::new_err)
+    }
+}
+
+#[pyfunction]
+#[pyo3(signature = (filename, exclude_images=None, exclude_tilemaps=None, exclude_sounds=None, exclude_musics=None, excl_images=None, excl_tilemaps=None, excl_sounds=None, excl_musics=None))]
+#[allow(clippy::too_many_arguments)]
+fn save(
+    filename: &str,
+    exclude_images: Option<bool>,
+    exclude_tilemaps: Option<bool>,
+    exclude_sounds: Option<bool>,
+    exclude_musics: Option<bool>,
+    excl_images: Option<bool>,
+    excl_tilemaps: Option<bool>,
+    excl_sounds: Option<bool>,
+    excl_musics: Option<bool>,
+) -> PyResult<()> {
+    unsafe {
+        if !PYXEL_READY { return Ok(()); }
+        let ei = excl_images.or(exclude_images);
+        let et = excl_tilemaps.or(exclude_tilemaps);
+        let es = excl_sounds.or(exclude_sounds);
+        let em = excl_musics.or(exclude_musics);
+        pyxel_core::pyxel()
+            .save_resource(filename, ei, et, es, em)
+            .map_err(pyo3::exceptions::PyException::new_err)
+    }
+}
+
+#[pyfunction]
+fn load_pal(filename: &str) -> PyResult<()> {
+    unsafe {
+        if !PYXEL_READY { return Ok(()); }
+        pyxel_core::pyxel().load_palette(filename)
+            .map_err(pyo3::exceptions::PyException::new_err)
+    }
+}
+
+#[pyfunction]
+fn save_pal(filename: &str) -> PyResult<()> {
+    unsafe {
+        if !PYXEL_READY { return Ok(()); }
+        pyxel_core::pyxel().save_palette(filename)
+            .map_err(pyo3::exceptions::PyException::new_err)
+    }
+}
+
+#[pyfunction]
+#[pyo3(signature = (filename=None, scale=None))]
+fn screenshot(filename: Option<&str>, scale: Option<u32>) -> PyResult<()> {
+    unsafe {
+        if !PYXEL_READY { return Ok(()); }
+        pyxel_core::pyxel().save_screenshot(filename, scale)
+            .map_err(pyo3::exceptions::PyException::new_err)
+    }
+}
+
+#[pyfunction]
+#[pyo3(signature = (filename=None, scale=None))]
+fn screencast(filename: Option<&str>, scale: Option<u32>) -> PyResult<()> {
+    unsafe {
+        if !PYXEL_READY { return Ok(()); }
+        pyxel_core::pyxel().save_screencast(filename, scale)
+            .map_err(pyo3::exceptions::PyException::new_err)
+    }
+}
+
+#[pyfunction]
+fn reset_screencast() {
+    unsafe { if PYXEL_READY { pyxel_core::pyxel().reset_screencast(); } }
+}
+
+#[pyfunction]
+fn user_data_dir(vendor_name: &str, app_name: &str) -> PyResult<String> {
+    unsafe {
+        if !PYXEL_READY { return Ok(String::new()); }
+        pyxel_core::pyxel().user_data_dir(vendor_name, app_name)
+            .map_err(pyo3::exceptions::PyException::new_err)
     }
 }
 
@@ -1254,7 +1337,14 @@ fn pyxel(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(tilemap_fn,  m)?)?;
     m.add_function(wrap_pyfunction!(image_load,  m)?)?;
     m.add_function(wrap_pyfunction!(image_pset,  m)?)?;
-    m.add_function(wrap_pyfunction!(load,        m)?)?;
+    m.add_function(wrap_pyfunction!(load,             m)?)?;
+    m.add_function(wrap_pyfunction!(save,             m)?)?;
+    m.add_function(wrap_pyfunction!(load_pal,         m)?)?;
+    m.add_function(wrap_pyfunction!(save_pal,         m)?)?;
+    m.add_function(wrap_pyfunction!(screenshot,       m)?)?;
+    m.add_function(wrap_pyfunction!(screencast,       m)?)?;
+    m.add_function(wrap_pyfunction!(reset_screencast, m)?)?;
+    m.add_function(wrap_pyfunction!(user_data_dir,    m)?)?;
     // Input
     m.add_function(wrap_pyfunction!(btn,         m)?)?;
     m.add_function(wrap_pyfunction!(btnp,        m)?)?;
