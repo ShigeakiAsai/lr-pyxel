@@ -334,10 +334,6 @@ fn btnp(key: u32, hold: Option<u32>, repeat: Option<u32>) -> bool {
 
 // -- system ------------------------------------------------------------------
 
-#[pyfunction]
-fn frame_count() -> u32 {
-    *pyxel_core::frame_count()
-}
 
 // init() is a no-op: Pyxel is already initialized by retro_init()
 #[pyfunction]
@@ -673,15 +669,7 @@ fn mouse(visible: bool) {
     unsafe { if PYXEL_READY { pyxel_core::pyxel().set_mouse_visible(visible); } }
 }
 
-#[pyfunction]
-fn mouse_x() -> i32 {
-    *pyxel_core::mouse_x()
-}
 
-#[pyfunction]
-fn mouse_y() -> i32 {
-    *pyxel_core::mouse_y()
-}
 
 // ---------------------------------------------------------------------------
 // System functions (remaining)
@@ -1006,6 +994,41 @@ impl PyMusicList {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Module-level __getattr__ for dynamic variables (variable_wrapper.rs)
+// ---------------------------------------------------------------------------
+// This mirrors pyxel-binding's variable_wrapper.rs __getattr__ approach:
+// variables that change every frame (frame_count, mouse_x/y, etc.) are
+// returned dynamically instead of being set once at module init time.
+
+#[pyfunction]
+fn __getattr__(py: Python, name: &str) -> PyResult<Py<PyAny>> {
+    let value: Py<PyAny> = match name {
+        // System
+        "width"       => (*pyxel_core::width()).into_py(py),
+        "height"      => (*pyxel_core::height()).into_py(py),
+        "frame_count" => (*pyxel_core::frame_count()).into_py(py),
+        // Input
+        "mouse_x"     => (*pyxel_core::mouse_x()).into_py(py),
+        "mouse_y"     => (*pyxel_core::mouse_y()).into_py(py),
+        "mouse_wheel" => (*pyxel_core::mouse_wheel()).into_py(py),
+        // Graphics
+        "colors"   => {
+            let pal = pyxel_core::colors();
+            pyo3::types::PyList::new_bound(py, pal.iter().copied()).into()
+        },
+        "images"   => PyImageList.into_py(py),
+        "tilemaps" => PyTilemapList.into_py(py),
+        // Audio
+        "sounds"   => PySoundList.into_py(py),
+        "musics"   => PyMusicList.into_py(py),
+        _ => return Err(pyo3::exceptions::PyAttributeError::new_err(
+            format!("module 'pyxel' has no attribute '{name}'")
+        )),
+    };
+    Ok(value)
+}
+
 #[pymodule]
 fn pyxel(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Drawing
@@ -1038,8 +1061,6 @@ fn pyxel(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(btnr,        m)?)?;
     m.add_function(wrap_pyfunction!(btnv,        m)?)?;
     m.add_function(wrap_pyfunction!(mouse,       m)?)?;
-    m.add_function(wrap_pyfunction!(mouse_x,     m)?)?;
-    m.add_function(wrap_pyfunction!(mouse_y,     m)?)?;
     // Audio
     m.add_function(wrap_pyfunction!(sound_set,   m)?)?;
     m.add_function(wrap_pyfunction!(play,        m)?)?;
@@ -1060,7 +1081,6 @@ fn pyxel(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(nseed,       m)?)?;
     m.add_function(wrap_pyfunction!(noise,       m)?)?;
     // System
-    m.add_function(wrap_pyfunction!(frame_count, m)?)?;
     m.add_function(wrap_pyfunction!(quit,        m)?)?;
     m.add_function(wrap_pyfunction!(show,        m)?)?;
     m.add_function(wrap_pyfunction!(flip,        m)?)?;
@@ -1069,51 +1089,23 @@ fn pyxel(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(init,        m)?)?;
     m.add_function(wrap_pyfunction!(run,         m)?)?;
     // width/height as module attributes
-    m.add("width",  *pyxel_core::width())?;
-    m.add("height", *pyxel_core::height())?;
+    // Dynamic variables via __getattr__ (variable_wrapper.rs approach)
+    // width, height, frame_count, mouse_x/y, colors, images, tilemaps,
+    // sounds, musics are all returned dynamically by __getattr__
+    m.add_function(wrap_pyfunction!(__getattr__, m)?)?;
+
+    // Constants (constant_wrapper.rs)
     add_module_constants(m)?;
 
-    // Expose colors as a Python list (16 RGB24 values)
-    // pyxel.colors[n] returns the RGB value of palette entry n
-    {
-        let pal = pyxel_core::colors();
-        let color_list = pyo3::types::PyList::new_bound(_py, pal.iter().copied());
-        m.add("colors", color_list)?;
-    }
-
-    // GAMEPAD constants
-    m.add("GAMEPAD1_BUTTON_A",             pyxel_core::GAMEPAD1_BUTTON_A)?;
-    m.add("GAMEPAD1_BUTTON_B",             pyxel_core::GAMEPAD1_BUTTON_B)?;
-    m.add("GAMEPAD1_BUTTON_X",             pyxel_core::GAMEPAD1_BUTTON_X)?;
-    m.add("GAMEPAD1_BUTTON_Y",             pyxel_core::GAMEPAD1_BUTTON_Y)?;
-    m.add("GAMEPAD1_BUTTON_BACK",          pyxel_core::GAMEPAD1_BUTTON_BACK)?;
-    m.add("GAMEPAD1_BUTTON_START",         pyxel_core::GAMEPAD1_BUTTON_START)?;
-    m.add("GAMEPAD1_BUTTON_LEFTSHOULDER",  pyxel_core::GAMEPAD1_BUTTON_LEFTSHOULDER)?;
-    m.add("GAMEPAD1_BUTTON_RIGHTSHOULDER", pyxel_core::GAMEPAD1_BUTTON_RIGHTSHOULDER)?;
-    m.add("GAMEPAD1_BUTTON_DPAD_UP",       pyxel_core::GAMEPAD1_BUTTON_DPAD_UP)?;
-    m.add("GAMEPAD1_BUTTON_DPAD_DOWN",     pyxel_core::GAMEPAD1_BUTTON_DPAD_DOWN)?;
-    m.add("GAMEPAD1_BUTTON_DPAD_LEFT",     pyxel_core::GAMEPAD1_BUTTON_DPAD_LEFT)?;
-    m.add("GAMEPAD1_BUTTON_DPAD_RIGHT",    pyxel_core::GAMEPAD1_BUTTON_DPAD_RIGHT)?;
-
-    // Font constants
-    m.add("FONT_WIDTH",  pyxel_core::FONT_WIDTH)?;
-    m.add("FONT_HEIGHT", pyxel_core::FONT_HEIGHT)?;
-
-    // Resource count constants
-    m.add("NUM_IMAGES",   pyxel_core::NUM_IMAGES)?;
-    m.add("NUM_TILEMAPS", pyxel_core::NUM_TILEMAPS)?;
-    m.add("NUM_SOUNDS",   pyxel_core::NUM_SOUNDS)?;
-    m.add("NUM_MUSICS",   pyxel_core::NUM_MUSICS)?;
-
-    // Image/Sound/Music/Tilemap bank accessors
-    m.add("images",   PyImageList)?;
-    m.add("sounds",   PySoundList)?;
-    m.add("musics",   PyMusicList)?;
-    m.add("tilemaps", PyTilemapList)?;
+    // Register pyclass types
     m.add_class::<PyImage>()?;
+    m.add_class::<PyImageList>()?;
     m.add_class::<PySound>()?;
+    m.add_class::<PySoundList>()?;
     m.add_class::<PyMusic>()?;
+    m.add_class::<PyMusicList>()?;
     m.add_class::<PyTilemap>()?;
+    m.add_class::<PyTilemapList>()?;
 
     Ok(())
 }
@@ -1463,11 +1455,6 @@ pub unsafe extern "C" fn retro_run() {
     if unsafe { PY_UPDATE.is_some() || PY_DRAW.is_some() } {
         if run_this_frame {
             Python::with_gil(|py| {
-                // Update frame_count attribute (reuse existing GIL)
-                if let Ok(m) = py.import_bound("pyxel") {
-                    let fc = *pyxel_core::frame_count();
-                    let _ = m.setattr("frame_count", fc);
-                }
                 if let Some(ref update) = PY_UPDATE {
                     if let Err(e) = update.call0(py) { e.print(py); }
                 }
