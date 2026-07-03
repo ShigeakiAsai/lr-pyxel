@@ -165,6 +165,63 @@ fn bltm(x: f32, y: f32, tm: u32, u: f32, v: f32, w: f32, h: f32, colkey: Option<
     }
 }
 
+// blt3d(x, y, w, h, img, pos, rot, fov=None, colkey=None)
+#[pyfunction]
+#[pyo3(signature = (x, y, w, h, img, pos, rot, fov=None, colkey=None))]
+#[allow(clippy::too_many_arguments)]
+fn blt3d(
+    x: f32, y: f32, w: f32, h: f32,
+    img: u32,
+    pos: (f32, f32, f32),
+    rot: (f32, f32, f32),
+    fov: Option<f32>,
+    colkey: Option<u8>,
+) {
+    unsafe {
+        if PYXEL_READY {
+            pyxel_core::pyxel().draw_image_3d(x, y, w, h, img, pos, rot, fov, colkey);
+        }
+    }
+}
+
+// bltm3d(x, y, w, h, tm, pos, rot, fov=None, colkey=None)
+#[pyfunction]
+#[pyo3(signature = (x, y, w, h, tm, pos, rot, fov=None, colkey=None))]
+#[allow(clippy::too_many_arguments)]
+fn bltm3d(
+    x: f32, y: f32, w: f32, h: f32,
+    tm: u32,
+    pos: (f32, f32, f32),
+    rot: (f32, f32, f32),
+    fov: Option<f32>,
+    colkey: Option<u8>,
+) {
+    unsafe {
+        if PYXEL_READY {
+            pyxel_core::pyxel().draw_tilemap_3d(x, y, w, h, tm, pos, rot, fov, colkey);
+        }
+    }
+}
+
+// Deprecated: pyxel.image(n) → use pyxel.images[n] instead
+#[pyfunction]
+fn image(img: u32) -> PyResult<PyImage> {
+    if img as usize >= pyxel_core::NUM_IMAGES as usize {
+        return Err(pyo3::exceptions::PyValueError::new_err("Invalid image index"));
+    }
+    Ok(PyImage { bank: img as usize })
+}
+
+// Deprecated: pyxel.tilemap(n) → use pyxel.tilemaps[n] instead
+#[pyfunction]
+#[pyo3(name = "tilemap")]
+fn tilemap_fn(tm: u32) -> PyResult<PyTilemap> {
+    if tm as usize >= pyxel_core::NUM_TILEMAPS as usize {
+        return Err(pyo3::exceptions::PyValueError::new_err("Invalid tilemap index"));
+    }
+    Ok(PyTilemap { bank: tm as usize })
+}
+
 // image_load(bank, path, x=0, y=0, include_colors=False)
 // Loads a PNG file into image bank `bank` at offset (x, y).
 // Mirrors pyxel_core::Image::load(); the bank index must already exist
@@ -1191,6 +1248,10 @@ fn pyxel(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(dither,      m)?)?;
     m.add_function(wrap_pyfunction!(blt,         m)?)?;
     m.add_function(wrap_pyfunction!(bltm,        m)?)?;
+    m.add_function(wrap_pyfunction!(blt3d,       m)?)?;
+    m.add_function(wrap_pyfunction!(bltm3d,      m)?)?;
+    m.add_function(wrap_pyfunction!(image,       m)?)?;
+    m.add_function(wrap_pyfunction!(tilemap_fn,  m)?)?;
     m.add_function(wrap_pyfunction!(image_load,  m)?)?;
     m.add_function(wrap_pyfunction!(image_pset,  m)?)?;
     m.add_function(wrap_pyfunction!(load,        m)?)?;
