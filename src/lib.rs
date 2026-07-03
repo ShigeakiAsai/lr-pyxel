@@ -754,6 +754,46 @@ impl PySoundList {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Music bank wrapper (pyxel.musics[n])
+// ---------------------------------------------------------------------------
+
+#[pyclass(name = "Music")]
+struct PyMusic {
+    bank: usize,
+}
+
+#[pymethods]
+impl PyMusic {
+    // set(ch0, ch1, ch2, ch3) — each arg is a list of sound indices for that channel
+    #[pyo3(signature = (ch0=vec![], ch1=vec![], ch2=vec![], ch3=vec![]))]
+    fn set(&self, ch0: Vec<u32>, ch1: Vec<u32>, ch2: Vec<u32>, ch3: Vec<u32>) -> PyResult<()> {
+        unsafe {
+            if !PYXEL_READY { return Ok(()); }
+            let mscs = pyxel_core::musics();
+            let rc = &mscs[self.bank];
+            let msc = &mut *rc.get();
+            msc.set(&[ch0, ch1, ch2, ch3]);
+            Ok(())
+        }
+    }
+}
+
+#[pyclass(name = "MusicList")]
+struct PyMusicList;
+
+#[pymethods]
+impl PyMusicList {
+    fn __getitem__(&self, idx: usize) -> PyResult<PyMusic> {
+        if idx >= pyxel_core::NUM_MUSICS as usize {
+            return Err(pyo3::exceptions::PyIndexError::new_err(
+                format!("music bank index {idx} out of range")
+            ));
+        }
+        Ok(PyMusic { bank: idx })
+    }
+}
+
 #[pymodule]
 fn pyxel(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Drawing
@@ -852,9 +892,13 @@ fn pyxel(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("NUM_SOUNDS",   pyxel_core::NUM_SOUNDS)?;
     m.add("NUM_MUSICS",   pyxel_core::NUM_MUSICS)?;
 
-    // Image/Sound bank accessors
+    // Image/Sound/Music bank accessors
     m.add("images", PyImageList)?;
     m.add("sounds", PySoundList)?;
+    m.add("musics", PyMusicList)?;
+    m.add_class::<PyImage>()?;
+    m.add_class::<PySound>()?;
+    m.add_class::<PyMusic>()?;
 
     Ok(())
 }
