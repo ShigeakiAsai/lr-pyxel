@@ -624,6 +624,136 @@ fn height_fn() -> u32 { *pyxel_core::height() }
 
 // -- module registration -----------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Image bank wrapper (pyxel.images[n])
+// ---------------------------------------------------------------------------
+
+#[pyclass(name = "Image")]
+struct PyImage {
+    bank: usize,
+}
+
+#[pymethods]
+impl PyImage {
+    fn load(&self, x: i32, y: i32, filename: &str) -> PyResult<()> {
+        unsafe {
+            if !PYXEL_READY { return Ok(()); }
+            let imgs = pyxel_core::images();
+            let rc = &imgs[self.bank];
+            let img = &mut *rc.get();
+            img.load(x, y, filename, Some(false))
+                .map_err(pyo3::exceptions::PyOSError::new_err)
+        }
+    }
+
+    fn set(&self, x: i32, y: i32, data: Vec<String>) -> PyResult<()> {
+        unsafe {
+            if !PYXEL_READY { return Ok(()); }
+            let imgs = pyxel_core::images();
+            let rc = &imgs[self.bank];
+            let img = &mut *rc.get();
+            let data_refs: Vec<&str> = data.iter().map(|s| s.as_str()).collect();
+            img.set(x, y, &data_refs);
+            Ok(())
+        }
+    }
+
+    fn pget(&self, x: f32, y: f32) -> u8 {
+        unsafe {
+            if !PYXEL_READY { return 0; }
+            let imgs = pyxel_core::images();
+            let rc = &imgs[self.bank];
+            let img = &*rc.get();
+            img.pixel(x, y)
+        }
+    }
+
+    fn pset(&self, x: f32, y: f32, color: u8) {
+        unsafe {
+            if !PYXEL_READY { return; }
+            let imgs = pyxel_core::images();
+            let rc = &imgs[self.bank];
+            let img = &mut *rc.get();
+            img.set_pixel(x, y, color);
+        }
+    }
+
+    #[getter]
+    fn width(&self) -> u32 {
+        unsafe {
+            if !PYXEL_READY { return 0; }
+            let imgs = pyxel_core::images();
+            let rc = &imgs[self.bank];
+            let img = &*rc.get();
+            img.width()
+        }
+    }
+
+    #[getter]
+    fn height(&self) -> u32 {
+        unsafe {
+            if !PYXEL_READY { return 0; }
+            let imgs = pyxel_core::images();
+            let rc = &imgs[self.bank];
+            let img = &*rc.get();
+            img.height()
+        }
+    }
+}
+
+#[pyclass(name = "ImageList")]
+struct PyImageList;
+
+#[pymethods]
+impl PyImageList {
+    fn __getitem__(&self, idx: usize) -> PyResult<PyImage> {
+        if idx >= pyxel_core::NUM_IMAGES as usize {
+            return Err(pyo3::exceptions::PyIndexError::new_err(
+                format!("image bank index {idx} out of range")
+            ));
+        }
+        Ok(PyImage { bank: idx })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Sound bank wrapper (pyxel.sounds[n])
+// ---------------------------------------------------------------------------
+
+#[pyclass(name = "Sound")]
+struct PySound {
+    bank: usize,
+}
+
+#[pymethods]
+impl PySound {
+    fn set(&self, notes: &str, tones: &str, volumes: &str, effects: &str, speed: u16) -> PyResult<()> {
+        unsafe {
+            if !PYXEL_READY { return Ok(()); }
+            let snds = pyxel_core::sounds();
+            let rc = &snds[self.bank];
+            let snd = &mut *rc.get();
+            snd.set(notes, tones, volumes, effects, speed)
+                .map_err(pyo3::exceptions::PyValueError::new_err)
+        }
+    }
+}
+
+#[pyclass(name = "SoundList")]
+struct PySoundList;
+
+#[pymethods]
+impl PySoundList {
+    fn __getitem__(&self, idx: usize) -> PyResult<PySound> {
+        if idx >= pyxel_core::NUM_SOUNDS as usize {
+            return Err(pyo3::exceptions::PyIndexError::new_err(
+                format!("sound bank index {idx} out of range")
+            ));
+        }
+        Ok(PySound { bank: idx })
+    }
+}
+
 #[pymodule]
 fn pyxel(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Drawing
@@ -711,6 +841,21 @@ fn pyxel(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("GAMEPAD1_BUTTON_DPAD_DOWN",     pyxel_core::GAMEPAD1_BUTTON_DPAD_DOWN)?;
     m.add("GAMEPAD1_BUTTON_DPAD_LEFT",     pyxel_core::GAMEPAD1_BUTTON_DPAD_LEFT)?;
     m.add("GAMEPAD1_BUTTON_DPAD_RIGHT",    pyxel_core::GAMEPAD1_BUTTON_DPAD_RIGHT)?;
+
+    // Font constants
+    m.add("FONT_WIDTH",  pyxel_core::FONT_WIDTH)?;
+    m.add("FONT_HEIGHT", pyxel_core::FONT_HEIGHT)?;
+
+    // Resource count constants
+    m.add("NUM_IMAGES",   pyxel_core::NUM_IMAGES)?;
+    m.add("NUM_TILEMAPS", pyxel_core::NUM_TILEMAPS)?;
+    m.add("NUM_SOUNDS",   pyxel_core::NUM_SOUNDS)?;
+    m.add("NUM_MUSICS",   pyxel_core::NUM_MUSICS)?;
+
+    // Image/Sound bank accessors
+    m.add("images", PyImageList)?;
+    m.add("sounds", PySoundList)?;
+
     Ok(())
 }
 
