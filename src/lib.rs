@@ -999,76 +999,193 @@ fn resize(width: u32, height: u32) -> PyResult<()> {
 // Image bank wrapper (pyxel.images[n])
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Image wrapper (image_wrapper.rs)
+// ---------------------------------------------------------------------------
+
 #[pyclass(name = "Image")]
 struct PyImage {
     bank: usize,
 }
 
+impl PyImage {
+    fn rc(&self) -> &pyxel_core::RcImage {
+        &pyxel_core::images()[self.bank]
+    }
+}
+
 #[pymethods]
 impl PyImage {
-    fn load(&self, x: i32, y: i32, filename: &str) -> PyResult<()> {
-        unsafe {
-            if !PYXEL_READY { return Ok(()); }
-            let imgs = pyxel_core::images();
-            let rc = &imgs[self.bank];
-            let img = &mut *rc.get();
-            img.load(x, y, filename, Some(false))
-                .map_err(pyo3::exceptions::PyOSError::new_err)
-        }
-    }
-
-    fn set(&self, x: i32, y: i32, data: Vec<String>) -> PyResult<()> {
-        unsafe {
-            if !PYXEL_READY { return Ok(()); }
-            let imgs = pyxel_core::images();
-            let rc = &imgs[self.bank];
-            let img = &mut *rc.get();
-            let data_refs: Vec<&str> = data.iter().map(|s| s.as_str()).collect();
-            img.set(x, y, &data_refs);
-            Ok(())
-        }
-    }
-
-    fn pget(&self, x: f32, y: f32) -> u8 {
-        unsafe {
-            if !PYXEL_READY { return 0; }
-            let imgs = pyxel_core::images();
-            let rc = &imgs[self.bank];
-            let img = &*rc.get();
-            img.pixel(x, y)
-        }
-    }
-
-    fn pset(&self, x: f32, y: f32, color: u8) {
-        unsafe {
-            if !PYXEL_READY { return; }
-            let imgs = pyxel_core::images();
-            let rc = &imgs[self.bank];
-            let img = &mut *rc.get();
-            img.set_pixel(x, y, color);
-        }
+    #[new]
+    fn new(width: u32, height: u32) -> Self {
+        // Create a standalone Image and store it in the first available bank
+        // For simplicity, we use bank 0 as a scratch buffer when constructing
+        // NOTE: This is a simplification; full impl needs dynamic storage
+        let _ = (width, height);
+        PyImage { bank: 0 }
     }
 
     #[getter]
     fn width(&self) -> u32 {
-        unsafe {
-            if !PYXEL_READY { return 0; }
-            let imgs = pyxel_core::images();
-            let rc = &imgs[self.bank];
-            let img = &*rc.get();
-            img.width()
-        }
+        unsafe { (&*self.rc().get()).width() }
     }
 
     #[getter]
     fn height(&self) -> u32 {
+        unsafe { (&*self.rc().get()).height() }
+    }
+
+    fn set(&self, x: i32, y: i32, data: Vec<String>) {
         unsafe {
-            if !PYXEL_READY { return 0; }
-            let imgs = pyxel_core::images();
-            let rc = &imgs[self.bank];
-            let img = &*rc.get();
-            img.height()
+            let img = &mut *self.rc().get();
+            let refs: Vec<&str> = data.iter().map(String::as_str).collect();
+            img.set(x, y, &refs);
         }
+    }
+
+    #[pyo3(signature = (x, y, filename, include_colors=None))]
+    fn load(&self, x: i32, y: i32, filename: &str, include_colors: Option<bool>) -> PyResult<()> {
+        unsafe {
+            let img = &mut *self.rc().get();
+            img.load(x, y, filename, include_colors)
+                .map_err(pyo3::exceptions::PyException::new_err)
+        }
+    }
+
+    fn save(&self, filename: &str, scale: u32) -> PyResult<()> {
+        unsafe {
+            let img = &*self.rc().get();
+            img.save(filename, scale)
+                .map_err(pyo3::exceptions::PyException::new_err)
+        }
+    }
+
+    #[pyo3(signature = (x=None, y=None, w=None, h=None))]
+    fn clip(&self, x: Option<f32>, y: Option<f32>, w: Option<f32>, h: Option<f32>) -> PyResult<()> {
+        unsafe {
+            let img = &mut *self.rc().get();
+            if let (Some(x), Some(y), Some(w), Some(h)) = (x, y, w, h) {
+                img.set_clip_rect(x, y, w, h);
+            } else {
+                img.reset_clip_rect();
+            }
+        }
+        Ok(())
+    }
+
+    #[pyo3(signature = (x=None, y=None))]
+    fn camera(&self, x: Option<f32>, y: Option<f32>) -> PyResult<()> {
+        unsafe {
+            let img = &mut *self.rc().get();
+            if let (Some(x), Some(y)) = (x, y) {
+                img.set_camera(x, y);
+            } else {
+                img.reset_camera();
+            }
+        }
+        Ok(())
+    }
+
+    #[pyo3(signature = (col1=None, col2=None))]
+    fn pal(&self, col1: Option<u8>, col2: Option<u8>) -> PyResult<()> {
+        unsafe {
+            let img = &mut *self.rc().get();
+            if let (Some(c1), Some(c2)) = (col1, col2) {
+                img.map_color(c1, c2);
+            } else {
+                img.reset_color_map();
+            }
+        }
+        Ok(())
+    }
+
+    fn dither(&self, alpha: f32) {
+        unsafe { (&mut *self.rc().get()).set_dithering(alpha); }
+    }
+
+    fn cls(&self, col: u8) {
+        unsafe { (&mut *self.rc().get()).clear(col); }
+    }
+
+    fn pget(&self, x: f32, y: f32) -> u8 {
+        unsafe { (&*self.rc().get()).pixel(x, y) }
+    }
+
+    fn pset(&self, x: f32, y: f32, col: u8) {
+        unsafe { (&mut *self.rc().get()).set_pixel(x, y, col); }
+    }
+
+    fn line(&self, x1: f32, y1: f32, x2: f32, y2: f32, col: u8) {
+        unsafe { (&mut *self.rc().get()).draw_line(x1, y1, x2, y2, col); }
+    }
+
+    fn rect(&self, x: f32, y: f32, w: f32, h: f32, col: u8) {
+        unsafe { (&mut *self.rc().get()).draw_rect(x, y, w, h, col); }
+    }
+
+    fn rectb(&self, x: f32, y: f32, w: f32, h: f32, col: u8) {
+        unsafe { (&mut *self.rc().get()).draw_rect_border(x, y, w, h, col); }
+    }
+
+    fn circ(&self, x: f32, y: f32, r: f32, col: u8) {
+        unsafe { (&mut *self.rc().get()).draw_circle(x, y, r, col); }
+    }
+
+    fn circb(&self, x: f32, y: f32, r: f32, col: u8) {
+        unsafe { (&mut *self.rc().get()).draw_circle_border(x, y, r, col); }
+    }
+
+    fn elli(&self, x: f32, y: f32, w: f32, h: f32, col: u8) {
+        unsafe { (&mut *self.rc().get()).draw_ellipse(x, y, w, h, col); }
+    }
+
+    fn ellib(&self, x: f32, y: f32, w: f32, h: f32, col: u8) {
+        unsafe { (&mut *self.rc().get()).draw_ellipse_border(x, y, w, h, col); }
+    }
+
+    fn tri(&self, x1: f32, y1: f32, x2: f32, y2: f32, x3: f32, y3: f32, col: u8) {
+        unsafe { (&mut *self.rc().get()).draw_triangle(x1, y1, x2, y2, x3, y3, col); }
+    }
+
+    fn trib(&self, x1: f32, y1: f32, x2: f32, y2: f32, x3: f32, y3: f32, col: u8) {
+        unsafe { (&mut *self.rc().get()).draw_triangle_border(x1, y1, x2, y2, x3, y3, col); }
+    }
+
+    fn fill(&self, x: f32, y: f32, col: u8) {
+        unsafe { (&mut *self.rc().get()).flood_fill(x, y, col); }
+    }
+
+    #[pyo3(signature = (x, y, img, u, v, w, h, colkey=None, rotate=None, scale=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn blt(&self, x: f32, y: f32, img: u32, u: f32, v: f32, w: f32, h: f32,
+           colkey: Option<u8>, rotate: Option<f32>, scale: Option<f32>) -> PyResult<()> {
+        unsafe {
+            let src = pyxel_core::images().get(img as usize)
+                .cloned()
+                .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("Invalid image index"))?;
+            let dst = &mut *self.rc().get();
+            dst.draw_image(x, y, &src, u, v, w, h, colkey, rotate, scale);
+        }
+        Ok(())
+    }
+
+    #[pyo3(signature = (x, y, tm, u, v, w, h, colkey=None, rotate=None, scale=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn bltm(&self, x: f32, y: f32, tm: u32, u: f32, v: f32, w: f32, h: f32,
+            colkey: Option<u8>, rotate: Option<f32>, scale: Option<f32>) -> PyResult<()> {
+        unsafe {
+            let src = pyxel_core::tilemaps().get(tm as usize)
+                .cloned()
+                .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("Invalid tilemap index"))?;
+            let dst = &mut *self.rc().get();
+            dst.draw_tilemap(x, y, &src, u, v, w, h, colkey, rotate, scale);
+        }
+        Ok(())
+    }
+
+    #[pyo3(signature = (x, y, s, col))]
+    fn text(&self, x: f32, y: f32, s: &str, col: u8) {
+        unsafe { (&mut *self.rc().get()).draw_text(x, y, s, col, None); }
     }
 }
 
