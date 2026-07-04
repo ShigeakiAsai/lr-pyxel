@@ -2299,19 +2299,15 @@ pub unsafe extern "C" fn retro_deinit() {
 // Parse pyxel.init(w, h, ..., fps=N, ...) from a Python script.
 // Returns (width, height, fps) if found, None otherwise.
 fn parse_pyxel_init(script: &str) -> Option<(u32, u32, u32)> {
-    // First, build a map of simple variable assignments (VAR = NUMBER)
-    // e.g. SCREEN_W = 40, SCREEN_H = 50, FPS = 20
+    // Build variable map from simple assignments (VAR = NUMBER)
     let mut var_map: std::collections::HashMap<&str, u32> = std::collections::HashMap::new();
     for line in script.lines() {
         let line = line.trim();
+        if line.starts_with('#') { continue; }
         if let Some(eq_pos) = line.find('=') {
             let key = line[..eq_pos].trim();
             let val_str = line[eq_pos+1..].trim();
-            // Only handle simple identifier = number
-            if key.chars().all(|c| c.is_alphanumeric() || c == '_')
-                && !key.is_empty()
-                && !key.contains(' ')
-            {
+            if key.chars().all(|c| c.is_alphanumeric() || c == '_') && !key.is_empty() {
                 if let Ok(n) = val_str.parse::<u32>() {
                     var_map.insert(key, n);
                 }
@@ -2319,60 +2315,39 @@ fn parse_pyxel_init(script: &str) -> Option<(u32, u32, u32)> {
         }
     }
 
-    // Find pyxel.init( call
-    let search_patterns = ["pyxel.init(", "pyxel.init ("];
-    let mut start = None;
-    for pat in &search_patterns {
-        if let Some(pos) = script.find(pat) {
-            start = Some(pos + pat.len());
-            break;
-        }
-    }
-    let start = start?;
-
-    // Extract the argument string up to the closing paren
-    let rest = &script[start..];
+    // Find pyxel.init( and extract content
+    let init_pos = script.find("pyxel.init(")?;
+    let after = &script[init_pos + "pyxel.init(".len()..];
     let mut depth = 1;
     let mut end = 0;
-    for (i, c) in rest.char_indices() {
+    for (i, c) in after.char_indices() {
         match c {
             '(' => depth += 1,
-            ')' => {
-                depth -= 1;
-                if depth == 0 {
-                    end = i;
-                    break;
-                }
-            }
+            ')' => { depth -= 1; if depth == 0 { end = i; break; } }
             _ => {}
         }
     }
-    let args_str = &rest[..end];
+    let args_str = &after[..end];
 
-    // Helper: resolve value (number literal or variable name)
+    // Helper: resolve value (literal or variable)
     let resolve = |s: &str| -> Option<u32> {
-        let s = s.trim();
-        if let Ok(n) = s.parse::<u32>() {
-            Some(n)
-        } else {
-            var_map.get(s).copied()
-        }
+        let s = s.trim().trim_end_matches(',').trim();
+        s.parse::<u32>().ok().or_else(|| var_map.get(s).copied())
     };
 
-    // Parse positional and keyword arguments
+    // Extract each argument line by line
     let mut w: Option<u32> = None;
     let mut h: Option<u32> = None;
     let mut fps: Option<u32> = None;
-
-    let parts: Vec<&str> = args_str.split(',').collect();
     let mut positional = 0;
-    for part in &parts {
-        let part = part.trim();
-        if part.is_empty() { continue; }
 
-        if let Some(kv) = part.split_once('=') {
-            let key = kv.0.trim();
-            let val = resolve(kv.1.trim());
+    for line in args_str.lines() {
+        let line = line.trim().trim_end_matches(',').trim();
+        if line.is_empty() { continue; }
+
+        if let Some(eq_pos) = line.find('=') {
+            let key = line[..eq_pos].trim();
+            let val = resolve(&line[eq_pos+1..]);
             match key {
                 "w" | "width"  => w = val,
                 "h" | "height" => h = val,
@@ -2380,53 +2355,23 @@ fn parse_pyxel_init(script: &str) -> Option<(u32, u32, u32)> {
                 _ => {}
             }
         } else {
-            let val = resolve(part);
             match positional {
-                0 => w = val,
-                1 => h = val,
-                3 => fps = val,
+                0 => w = resolve(line),
+                1 => h = resolve(line),
+                3 => fps = resolve(line),
                 _ => {}
             }
             positional += 1;
         }
     }
 
-    match (w, h) {
-        (Some(w), Some(h)) if w > 0 && h > 0 => {
-            Some((w, h, fps.unwrap_or(30)))
-        }
-        _ => {
-            // Fallback: just extract fps= from the args string directly
-            if let Some(fps_val) = extract_fps_from_args(args_str, &var_map) {
-                // Return with default size if w/h not found
-                // At minimum update GAME_FPS even if size is unknown
-                fps = Some(fps_val);
-            }
-            match (w, h) {
-                (Some(w), Some(h)) if w > 0 && h > 0 => Some((w, h, fps.unwrap_or(30))),
-                _ => fps.map(|f| (128, 128, f)), // unknown size but known fps
-            }
-        }
-    }
+    Some((
+        w.unwrap_or(128),
+        h.unwrap_or(128),
+        fps.unwrap_or(30),
+    ))
 }
 
-fn extract_fps_from_args(args: &str, var_map: &std::collections::HashMap<&str, u32>) -> Option<u32> {
-    for line in args.lines() {
-        let line = line.trim().trim_end_matches(',');
-        if let Some(kv) = line.split_once('=') {
-            if kv.0.trim() == "fps" {
-                let val = kv.1.trim();
-                if let Ok(n) = val.parse::<u32>() {
-                    return Some(n);
-                }
-                if let Some(&n) = var_map.get(val) {
-                    return Some(n);
-                }
-            }
-        }
-    }
-    None
-}
 
 fn extract_pyxapp(pyxapp_path: &str) -> Option<String> {
 
@@ -2524,9 +2469,12 @@ pub unsafe extern "C" fn retro_load_game(game: *const c_void) -> bool {
     // to set the correct screen size and fps (problem⑤)
     if let Ok(code) = std::fs::read_to_string(&script_path) {
         if let Some((w, h, fps)) = parse_pyxel_init(&code) {
+            eprintln!("[lr-pyxel] parsed init: w={w} h={h} fps={fps}");
             GAME_W   = w;
             GAME_H   = h;
             GAME_FPS = fps;
+        } else {
+            eprintln!("[lr-pyxel] parse_pyxel_init: not found, using defaults");
         }
     }
 
