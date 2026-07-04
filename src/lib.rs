@@ -1565,6 +1565,87 @@ impl PyFont {
 }
 
 // ---------------------------------------------------------------------------
+// Channel wrapper (channel_wrapper.rs)
+// ---------------------------------------------------------------------------
+
+#[pyclass(name = "Channel")]
+struct PyChannel {
+    bank: usize,
+}
+
+impl PyChannel {
+    fn rc(&self) -> &pyxel_core::RcChannel {
+        &pyxel_core::channels()[self.bank]
+    }
+}
+
+#[pymethods]
+impl PyChannel {
+    #[getter]
+    fn gain(&self) -> pyxel_core::ChannelGain {
+        unsafe { (&*self.rc().get()).gain }
+    }
+
+    #[setter]
+    fn set_gain(&self, gain: pyxel_core::ChannelGain) {
+        unsafe { (&mut *self.rc().get()).gain = gain; }
+    }
+
+    #[getter]
+    fn detune(&self) -> pyxel_core::ChannelDetune {
+        unsafe { (&*self.rc().get()).detune }
+    }
+
+    #[setter]
+    fn set_detune(&self, detune: pyxel_core::ChannelDetune) {
+        unsafe { (&mut *self.rc().get()).detune = detune; }
+    }
+
+    #[pyo3(signature = (snd, sec=None, r#loop=None, resume=None))]
+    fn play(&self, snd: u32, sec: Option<f32>, r#loop: Option<bool>, resume: Option<bool>) -> PyResult<()> {
+        unsafe {
+            if !PYXEL_READY { return Ok(()); }
+            let sound = pyxel_core::sounds().get(snd as usize)
+                .cloned()
+                .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("Invalid sound index"))?;
+            let ch = &mut *self.rc().get();
+            ch.play_sound(sound, sec, r#loop.unwrap_or(false), resume.unwrap_or(false));
+        }
+        Ok(())
+    }
+
+    fn stop(&self) {
+        unsafe {
+            if PYXEL_READY {
+                (&mut *self.rc().get()).stop();
+            }
+        }
+    }
+
+    fn play_pos(&self) -> Option<(u32, f32)> {
+        unsafe {
+            if !PYXEL_READY { return None; }
+            (&mut *self.rc().get()).play_position()
+        }
+    }
+}
+
+#[pyclass(name = "ChannelList")]
+struct PyChannelList;
+
+#[pymethods]
+impl PyChannelList {
+    fn __getitem__(&self, idx: usize) -> PyResult<PyChannel> {
+        if idx >= pyxel_core::NUM_CHANNELS as usize {
+            return Err(pyo3::exceptions::PyIndexError::new_err(
+                format!("channel index {idx} out of range")
+            ));
+        }
+        Ok(PyChannel { bank: idx })
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tone wrapper (tone_wrapper.rs)
 // ---------------------------------------------------------------------------
 
@@ -1706,6 +1787,7 @@ fn __getattr__(py: Python, name: &str) -> PyResult<Py<PyAny>> {
         "sounds"   => PySoundList.into_py(py),
         "musics"   => PyMusicList.into_py(py),
         "tones"    => PyToneList.into_py(py),
+        "channels" => PyChannelList.into_py(py),
         _ => return Err(pyo3::exceptions::PyAttributeError::new_err(
             format!("module 'pyxel' has no attribute '{name}'")
         )),
@@ -1813,6 +1895,8 @@ fn pyxel(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyMusicList>()?;
     m.add_class::<PyTilemap>()?;
     m.add_class::<PyTilemapList>()?;
+    m.add_class::<PyChannel>()?;
+    m.add_class::<PyChannelList>()?;
     m.add_class::<PyTone>()?;
     m.add_class::<PyToneList>()?;
 
