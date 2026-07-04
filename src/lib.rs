@@ -1257,33 +1257,37 @@ impl PySoundList {
 // Tilemap bank wrapper (pyxel.tilemaps[n])
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Tilemap wrapper (tilemap_wrapper.rs)
+// ---------------------------------------------------------------------------
+
 #[pyclass(name = "Tilemap")]
 struct PyTilemap {
     bank: usize,
 }
 
+impl PyTilemap {
+    fn rc(&self) -> &pyxel_core::RcTilemap {
+        &pyxel_core::tilemaps()[self.bank]
+    }
+}
+
 #[pymethods]
 impl PyTilemap {
-    fn set(&self, x: i32, y: i32, data: Vec<String>) -> PyResult<()> {
-        unsafe {
-            if !PYXEL_READY { return Ok(()); }
-            let tms = pyxel_core::tilemaps();
-            let rc = &tms[self.bank];
-            let tm = &mut *rc.get();
-            let data_refs: Vec<&str> = data.iter().map(|s| s.as_str()).collect();
-            tm.set(x, y, &data_refs);
-            Ok(())
-        }
+    #[getter]
+    fn width(&self) -> u32 {
+        unsafe { (&*self.rc().get()).width() }
+    }
+
+    #[getter]
+    fn height(&self) -> u32 {
+        unsafe { (&*self.rc().get()).height() }
     }
 
     #[getter]
     fn imgsrc(&self) -> u32 {
         unsafe {
-            if !PYXEL_READY { return 0; }
-            let tms = pyxel_core::tilemaps();
-            let rc = &tms[self.bank];
-            let tm = &*rc.get();
-            match &tm.imgsrc {
+            match &(&*self.rc().get()).imgsrc {
                 pyxel_core::ImageSource::Index(i) => *i,
                 _ => 0,
             }
@@ -1293,45 +1297,127 @@ impl PyTilemap {
     #[setter]
     fn set_imgsrc(&self, idx: u32) {
         unsafe {
-            if !PYXEL_READY { return; }
-            let tms = pyxel_core::tilemaps();
-            let rc = &tms[self.bank];
-            let tm = &mut *rc.get();
-            tm.imgsrc = pyxel_core::ImageSource::Index(idx);
+            (&mut *self.rc().get()).imgsrc = pyxel_core::ImageSource::Index(idx);
         }
+    }
+
+    // Deprecated: refimg
+    #[getter]
+    fn refimg(&self) -> u32 { self.imgsrc() }
+
+    #[setter]
+    fn set_refimg(&self, idx: u32) { self.set_imgsrc(idx); }
+
+    fn set(&self, x: i32, y: i32, data: Vec<String>) {
+        unsafe {
+            let tm = &mut *self.rc().get();
+            let refs: Vec<&str> = data.iter().map(String::as_str).collect();
+            tm.set(x, y, &refs);
+        }
+    }
+
+    fn load(&self, x: i32, y: i32, filename: &str, layer: u32) -> PyResult<()> {
+        unsafe {
+            let tm = &mut *self.rc().get();
+            tm.load(x, y, filename, layer)
+                .map_err(pyo3::exceptions::PyException::new_err)
+        }
+    }
+
+    #[pyo3(signature = (x=None, y=None, w=None, h=None))]
+    fn clip(&self, x: Option<f32>, y: Option<f32>, w: Option<f32>, h: Option<f32>) -> PyResult<()> {
+        unsafe {
+            let tm = &mut *self.rc().get();
+            if let (Some(x), Some(y), Some(w), Some(h)) = (x, y, w, h) {
+                tm.set_clip_rect(x, y, w, h);
+            } else {
+                tm.reset_clip_rect();
+            }
+        }
+        Ok(())
+    }
+
+    #[pyo3(signature = (x=None, y=None))]
+    fn camera(&self, x: Option<f32>, y: Option<f32>) -> PyResult<()> {
+        unsafe {
+            let tm = &mut *self.rc().get();
+            if let (Some(x), Some(y)) = (x, y) {
+                tm.set_camera(x, y);
+            } else {
+                tm.reset_camera();
+            }
+        }
+        Ok(())
+    }
+
+    fn cls(&self, tile: (u16, u16)) {
+        unsafe { (&mut *self.rc().get()).clear(tile); }
     }
 
     fn pget(&self, x: f32, y: f32) -> (u16, u16) {
-        unsafe {
-            if !PYXEL_READY { return (0, 0); }
-            let tms = pyxel_core::tilemaps();
-            let rc = &tms[self.bank];
-            let tm = &*rc.get();
-            tm.tile(x, y)
-        }
+        unsafe { (&*self.rc().get()).tile(x, y) }
     }
 
     fn pset(&self, x: f32, y: f32, tile: (u16, u16)) {
-        unsafe {
-            if !PYXEL_READY { return; }
-            let tms = pyxel_core::tilemaps();
-            let rc = &tms[self.bank];
-            let tm = &mut *rc.get();
-            tm.set_tile(x, y, tile);
-        }
+        unsafe { (&mut *self.rc().get()).set_tile(x, y, tile); }
     }
 
-    #[pyo3(signature = (x, y, tm, u, v, w, h))]
-    fn blt(&self, x: f32, y: f32, tm: usize, u: f32, v: f32, w: f32, h: f32) -> PyResult<()> {
+    fn line(&self, x1: f32, y1: f32, x2: f32, y2: f32, tile: (u16, u16)) {
+        unsafe { (&mut *self.rc().get()).draw_line(x1, y1, x2, y2, tile); }
+    }
+
+    fn rect(&self, x: f32, y: f32, w: f32, h: f32, tile: (u16, u16)) {
+        unsafe { (&mut *self.rc().get()).draw_rect(x, y, w, h, tile); }
+    }
+
+    fn rectb(&self, x: f32, y: f32, w: f32, h: f32, tile: (u16, u16)) {
+        unsafe { (&mut *self.rc().get()).draw_rect_border(x, y, w, h, tile); }
+    }
+
+    fn circ(&self, x: f32, y: f32, r: f32, tile: (u16, u16)) {
+        unsafe { (&mut *self.rc().get()).draw_circle(x, y, r, tile); }
+    }
+
+    fn circb(&self, x: f32, y: f32, r: f32, tile: (u16, u16)) {
+        unsafe { (&mut *self.rc().get()).draw_circle_border(x, y, r, tile); }
+    }
+
+    fn elli(&self, x: f32, y: f32, w: f32, h: f32, tile: (u16, u16)) {
+        unsafe { (&mut *self.rc().get()).draw_ellipse(x, y, w, h, tile); }
+    }
+
+    fn ellib(&self, x: f32, y: f32, w: f32, h: f32, tile: (u16, u16)) {
+        unsafe { (&mut *self.rc().get()).draw_ellipse_border(x, y, w, h, tile); }
+    }
+
+    fn tri(&self, x1: f32, y1: f32, x2: f32, y2: f32, x3: f32, y3: f32, tile: (u16, u16)) {
+        unsafe { (&mut *self.rc().get()).draw_triangle(x1, y1, x2, y2, x3, y3, tile); }
+    }
+
+    fn trib(&self, x1: f32, y1: f32, x2: f32, y2: f32, x3: f32, y3: f32, tile: (u16, u16)) {
+        unsafe { (&mut *self.rc().get()).draw_triangle_border(x1, y1, x2, y2, x3, y3, tile); }
+    }
+
+    fn fill(&self, x: f32, y: f32, tile: (u16, u16)) {
+        unsafe { (&mut *self.rc().get()).flood_fill(x, y, tile); }
+    }
+
+    fn collide(&self, x: f32, y: f32, w: f32, h: f32, dx: f32, dy: f32, walls: Vec<(u16, u16)>) -> (f32, f32) {
+        unsafe { (&*self.rc().get()).collide(x, y, w, h, dx, dy, &walls) }
+    }
+
+    #[pyo3(signature = (x, y, tm, u, v, w, h, tilekey=None, rotate=None, scale=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn blt(&self, x: f32, y: f32, tm: u32, u: f32, v: f32, w: f32, h: f32,
+           tilekey: Option<(u16, u16)>, rotate: Option<f32>, scale: Option<f32>) -> PyResult<()> {
         unsafe {
-            if !PYXEL_READY { return Ok(()); }
-            let tms = pyxel_core::tilemaps();
-            let src_rc = &tms[tm];
-            let dst_rc = &tms[self.bank];
-            let dst = &mut *dst_rc.get();
-            dst.draw_tilemap(x, y, src_rc, u, v, w, h, None, None, None);
-            Ok(())
+            let src = pyxel_core::tilemaps().get(tm as usize)
+                .cloned()
+                .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("Invalid tilemap index"))?;
+            let dst = &mut *self.rc().get();
+            dst.draw_tilemap(x, y, &src, u, v, w, h, tilekey, rotate, scale);
         }
+        Ok(())
     }
 }
 
