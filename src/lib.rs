@@ -1437,6 +1437,34 @@ impl PyTilemapList {
 }
 
 // ---------------------------------------------------------------------------
+// Font wrapper (font_wrapper.rs)
+// ---------------------------------------------------------------------------
+
+#[pyclass(name = "Font")]
+struct PyFont {
+    inner: pyxel_core::RcFont,
+}
+
+// RcFont is Rc<UnsafeCell<Font>> which is not Send by default.
+// We are single-threaded in the libretro context so this is safe.
+unsafe impl Send for PyFont {}
+
+#[pymethods]
+impl PyFont {
+    #[new]
+    #[pyo3(signature = (filename, font_size=None))]
+    fn new(filename: &str, font_size: Option<f32>) -> PyResult<Self> {
+        pyxel_core::Font::new(filename, font_size)
+            .map(|inner| PyFont { inner })
+            .map_err(pyo3::exceptions::PyException::new_err)
+    }
+
+    fn text_width(&self, s: &str) -> i32 {
+        unsafe { (&mut *self.inner.get()).text_width(s) }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Music bank wrapper (pyxel.musics[n])
 // ---------------------------------------------------------------------------
 
@@ -1603,6 +1631,7 @@ fn pyxel(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // Register pyclass types
     m.add_class::<PyImage>()?;
+    m.add_class::<PyFont>()?;
     m.add_class::<PyImageList>()?;
     m.add_class::<PySound>()?;
     m.add_class::<PySoundList>()?;
