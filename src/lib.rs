@@ -2242,16 +2242,6 @@ pub unsafe extern "C" fn retro_init() {
         return;
     }
 
-    // Embed math.py and random.py stubs and write to /tmp so Python can import them.
-    // This provides math/random functions for games on Lakka where the native
-    // .so extensions cannot be loaded due to symbol conflicts.
-    const MATH_PY:   &str = include_str!("../math.py");
-    const RANDOM_PY: &str = include_str!("../random.py");
-    let stub_dir = std::path::Path::new("/tmp/lr-pyxel-stdlib");
-    let _ = std::fs::create_dir_all(stub_dir);
-    let _ = std::fs::write(stub_dir.join("math.py"),   MATH_PY);
-    let _ = std::fs::write(stub_dir.join("random.py"), RANDOM_PY);
-
     // Register "pyxel" built-in module BEFORE Py_Initialize
     append_to_inittab!(pyxel);
 
@@ -2282,17 +2272,6 @@ pub unsafe extern "C" fn retro_init() {
 
     // Start Python interpreter (after append_to_inittab)
     pyo3::prepare_freethreaded_python();
-
-    // Add our stdlib stub directory to sys.path so 'import math' finds our stub
-    Python::with_gil(|py| {
-        if let Ok(sys) = py.import_bound("sys") {
-            if let Ok(path) = sys.getattr("path") {
-                if let Ok(syspath) = path.downcast_into::<pyo3::types::PyList>() {
-                    let _ = syspath.insert(0, "/tmp/lr-pyxel-stdlib");
-                }
-            }
-        }
-    });
 }
 
 #[no_mangle]
@@ -2596,6 +2575,8 @@ pub unsafe extern "C" fn retro_load_game(game: *const c_void) -> bool {
         // Execute the game script
         let code    = std::fs::read_to_string(&script_path).unwrap_or_default();
         let globals = pyo3::types::PyDict::new_bound(py);
+        // Set __name__ = "__main__" so scripts using 'if __name__ == "__main__"' work
+        let _ = globals.set_item("__name__", "__main__");
 
         match py.run_bound(&code, Some(&globals), None) {
             Ok(_) => {
