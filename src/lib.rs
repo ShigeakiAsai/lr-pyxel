@@ -414,17 +414,24 @@ fn sound_set(
 // ---------------------------------------------------------------------------
 
 // play(ch, snd, sec=None, loop=False, resume=False)
+// snd can be a single sound index (u32) or a list of sound indices (Vec<u32>)
 #[pyfunction]
 #[pyo3(signature = (ch, snd, sec=None, r#loop=None, resume=None))]
-fn play(ch: u32, snd: u32, sec: Option<f32>, r#loop: Option<bool>, resume: Option<bool>) {
+fn play(ch: u32, snd: pyo3::Bound<'_, pyo3::PyAny>, sec: Option<f32>, r#loop: Option<bool>, resume: Option<bool>) -> PyResult<()> {
     unsafe {
-        if PYXEL_READY {
-            pyxel_core::pyxel().play_sound(
-                ch, snd, sec,
-                r#loop.unwrap_or(false),
-                resume.unwrap_or(false),
-            );
+        if !PYXEL_READY { return Ok(()); }
+        let should_loop   = r#loop.unwrap_or(false);
+        let should_resume = resume.unwrap_or(false);
+        if let Ok(idx) = snd.extract::<u32>() {
+            pyxel_core::pyxel().play_sound(ch, idx, sec, should_loop, should_resume);
+        } else if let Ok(seq) = snd.extract::<Vec<u32>>() {
+            pyxel_core::pyxel().play(ch, &seq, sec, should_loop, should_resume);
+        } else {
+            return Err(pyo3::exceptions::PyTypeError::new_err(
+                "snd must be an int or list of ints"
+            ));
         }
+        Ok(())
     }
 }
 
