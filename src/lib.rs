@@ -409,44 +409,86 @@ fn sound_set(
     }
 }
 
-// play(ch, snd, loop=False)
-// Plays sound bank `snd` once (or looped) on channel `ch`.
+// ---------------------------------------------------------------------------
+// Audio functions (audio_wrapper.rs)
+// ---------------------------------------------------------------------------
+
+// play(ch, snd, sec=None, loop=False, resume=False)
 #[pyfunction]
-#[pyo3(signature = (ch, snd, r#loop=false, resume=false))]
-fn play(ch: u32, snd: u32, r#loop: bool, resume: bool) {
+#[pyo3(signature = (ch, snd, sec=None, r#loop=None, resume=None))]
+fn play(ch: u32, snd: u32, sec: Option<f32>, r#loop: Option<bool>, resume: Option<bool>) {
     unsafe {
         if PYXEL_READY {
-            pyxel_core::pyxel().play_sound(ch, snd, Some(0.0), r#loop, resume);
+            pyxel_core::pyxel().play_sound(
+                ch, snd, sec,
+                r#loop.unwrap_or(false),
+                resume.unwrap_or(false),
+            );
         }
     }
 }
 
-// playm(msc, loop=False)
-// Plays music bank `msc`.
+// playm(msc, sec=None, loop=False)
 #[pyfunction]
-#[pyo3(signature = (msc, r#loop=false))]
-fn playm(msc: u32, r#loop: bool) {
+#[pyo3(signature = (msc, sec=None, r#loop=None))]
+fn playm(msc: u32, sec: Option<f32>, r#loop: Option<bool>) {
     unsafe {
         if PYXEL_READY {
-            pyxel_core::pyxel().play_music(msc, Some(0.0), r#loop);
+            pyxel_core::pyxel().play_music(msc, sec, r#loop.unwrap_or(false));
         }
     }
 }
 
 // stop(ch=None)
-// Stops playback on a single channel, or all channels if ch is omitted.
 #[pyfunction]
 #[pyo3(signature = (ch=None))]
 fn stop(ch: Option<u32>) {
     unsafe {
-        if !PYXEL_READY {
-            return;
-        }
+        if !PYXEL_READY { return; }
         match ch {
             Some(c) => pyxel_core::pyxel().stop_channel(c),
-            None => pyxel_core::pyxel().stop_all_channels(),
+            None    => pyxel_core::pyxel().stop_all_channels(),
         }
     }
+}
+
+// play_pos(ch)
+#[pyfunction]
+fn play_pos(ch: u32) -> Option<(u32, f32)> {
+    unsafe {
+        if !PYXEL_READY { return None; }
+        pyxel_core::pyxel().play_position(ch)
+    }
+}
+
+// Deprecated: pyxel.sound(n) → use pyxel.sounds[n]
+#[pyfunction]
+#[pyo3(name = "sound")]
+fn sound_fn(snd: u32) -> PyResult<PySound> {
+    if snd as usize >= pyxel_core::NUM_SOUNDS as usize {
+        return Err(pyo3::exceptions::PyValueError::new_err("Invalid sound index"));
+    }
+    Ok(PySound { bank: snd as usize })
+}
+
+// Deprecated: pyxel.music(n) → use pyxel.musics[n]
+#[pyfunction]
+#[pyo3(name = "music")]
+fn music_fn(msc: u32) -> PyResult<PyMusic> {
+    if msc as usize >= pyxel_core::NUM_MUSICS as usize {
+        return Err(pyo3::exceptions::PyValueError::new_err("Invalid music index"));
+    }
+    Ok(PyMusic { bank: msc as usize })
+}
+
+// Deprecated: pyxel.channel(n) → use pyxel.channels[n]
+#[pyfunction]
+#[pyo3(name = "channel")]
+fn channel_fn(ch: u32) -> PyResult<PyChannel> {
+    if ch as usize >= pyxel_core::NUM_CHANNELS as usize {
+        return Err(pyo3::exceptions::PyValueError::new_err("Invalid channel index"));
+    }
+    Ok(PyChannel { bank: ch as usize })
 }
 
 // -- input -------------------------------------------------------------------
@@ -1861,6 +1903,10 @@ fn pyxel(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(play,        m)?)?;
     m.add_function(wrap_pyfunction!(playm,       m)?)?;
     m.add_function(wrap_pyfunction!(stop,        m)?)?;
+    m.add_function(wrap_pyfunction!(play_pos,    m)?)?;
+    m.add_function(wrap_pyfunction!(sound_fn,    m)?)?;
+    m.add_function(wrap_pyfunction!(music_fn,    m)?)?;
+    m.add_function(wrap_pyfunction!(channel_fn,  m)?)?;
     // Math
     m.add_function(wrap_pyfunction!(ceil,        m)?)?;
     m.add_function(wrap_pyfunction!(floor,       m)?)?;
