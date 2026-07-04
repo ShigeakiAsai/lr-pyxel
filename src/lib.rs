@@ -2242,15 +2242,15 @@ pub unsafe extern "C" fn retro_init() {
         return;
     }
 
-    // Embed math.py stub and write to /tmp so Python can import it.
-    // This provides math functions for games that use 'import math' on Lakka,
-    // where the native math.so cannot be loaded due to symbol conflicts.
-    const MATH_PY: &str = include_str!("../math.py");
-    let math_path = std::path::Path::new("/tmp/lr-pyxel-stdlib/math.py");
-    if let Some(parent) = math_path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    let _ = std::fs::write(math_path, MATH_PY);
+    // Embed math.py and random.py stubs and write to /tmp so Python can import them.
+    // This provides math/random functions for games on Lakka where the native
+    // .so extensions cannot be loaded due to symbol conflicts.
+    const MATH_PY:   &str = include_str!("../math.py");
+    const RANDOM_PY: &str = include_str!("../random.py");
+    let stub_dir = std::path::Path::new("/tmp/lr-pyxel-stdlib");
+    let _ = std::fs::create_dir_all(stub_dir);
+    let _ = std::fs::write(stub_dir.join("math.py"),   MATH_PY);
+    let _ = std::fs::write(stub_dir.join("random.py"), RANDOM_PY);
 
     // Register "pyxel" built-in module BEFORE Py_Initialize
     append_to_inittab!(pyxel);
