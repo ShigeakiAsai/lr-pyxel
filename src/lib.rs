@@ -62,6 +62,12 @@ const FPS: u32      = 60;
 // Used to skip frames: a 30fps game runs update/draw every 2nd retro_run() call
 static mut GAME_FPS: u32 = 30;
 
+// RetroArch frame counter (incremented every retro_run())
+static mut RETRO_FRAME_COUNT: u64 = 0;
+
+// lr-pyxel managed frame_count (only incremented when game update runs)
+static mut LR_FRAME_COUNT: u32 = 0;
+
 // Game-requested screen size (set by pyxel.init(), default 128x128)
 static mut GAME_W: u32 = 128;
 static mut GAME_H: u32 = 128;
@@ -2003,7 +2009,7 @@ fn __getattr__(py: Python, name: &str) -> PyResult<Py<PyAny>> {
         // System
         "width"       => (*pyxel_core::width()).into_py(py),
         "height"      => (*pyxel_core::height()).into_py(py),
-        "frame_count" => (*pyxel_core::frame_count()).into_py(py),
+        "frame_count" => unsafe { LR_FRAME_COUNT }.into_py(py),
         // Input
         "mouse_x"     => (*pyxel_core::mouse_x()).into_py(py),
         "mouse_y"     => (*pyxel_core::mouse_y()).into_py(py),
@@ -2483,6 +2489,10 @@ pub unsafe extern "C" fn retro_load_game(game: *const c_void) -> bool {
         PY_UPDATE = None;
         PY_DRAW   = None;
 
+        // Reset frame counters for new content
+        RETRO_FRAME_COUNT = 0;
+        LR_FRAME_COUNT    = 0;
+
         // Clear cached modules from previous game to prevent import conflicts.
         // Without this, modules like 'constants' from game A would be reused
         // when game B tries to import its own 'constants' module.
@@ -2628,35 +2638,44 @@ pub unsafe extern "C" fn retro_run() {
         return;
     }
 
-    // 4. Call Python game callbacks if loaded, otherwise show placeholder.
+    // 4. Frame sync: increment RetroArch counter and determine if game should update.
+    //    RetroArch drives at 60fps; game may target 30fps (or other).
+    //    Only run update()/draw()/flip_screen()/audio when it's the game's turn.
+    RETRO_FRAME_COUNT += 1;
+    let step = (FPS / GAME_FPS).max(1) as u64;
+    let should_update = RETRO_FRAME_COUNT % step == 0;
+
     if unsafe { PY_UPDATE.is_some() || PY_DRAW.is_some() } {
-        Python::with_gil(|py| {
-            if let Some(ref update) = PY_UPDATE {
-                if let Err(e) = update.call0(py) { e.print(py); }
-            }
-            if let Some(ref draw) = PY_DRAW {
-                if let Err(e) = draw.call0(py) { e.print(py); }
-            }
-        });
+        if should_update {
+            // Increment lr-pyxel's frame_count (returned by pyxel.frame_count)
+            LR_FRAME_COUNT += 1;
+
+            Python::with_gil(|py| {
+                if let Some(ref update) = PY_UPDATE {
+                    if let Err(e) = update.call0(py) { e.print(py); }
+                }
+                if let Some(ref draw) = PY_DRAW {
+                    if let Err(e) = draw.call0(py) { e.print(py); }
+                }
+            });
+
+            // 5. Advance Pyxel's internal audio clock only when game updates.
+            //    This keeps audio speed in sync with game speed.
+            pyxel_core::pyxel().flip_screen();
+
+            // 6. Inject input AFTER flip_screen()
+            inject_input(buttons);
+
+            // 8. Render and submit audio samples (only on game frames)
+            submit_audio_frame();
+        }
     } else {
         // No game loaded — light blue placeholder
         pyxel_core::pyxel().clear(11);
     }
 
-    // 5. Advance one Pyxel frame.
-    //    flip_screen() calls start_input_frame() internally, resetting all key
-    //    states. inject_input() must come AFTER this so the fresh input is
-    //    registered in the new frame — preventing btnp() from firing every frame.
-    pyxel_core::pyxel().flip_screen();
-
-    // 6. Inject input AFTER flip_screen() so btnp() sees a single press
-    inject_input(buttons);
-
-    // 7. Submit framebuffer to RetroArch
+    // 7. Submit framebuffer to RetroArch every frame to keep display smooth
     submit_pyxel_frame();
-
-    // 8. Render and submit audio samples to RetroArch
-    submit_audio_frame();
 }
 
 // ---------------------------------------------------------------------------
