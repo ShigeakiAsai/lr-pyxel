@@ -110,10 +110,12 @@ fn rect(x: f32, y: f32, w: f32, h: f32, color: u8) {
 }
 
 #[pyfunction]
-fn text(x: f32, y: f32, s: &str, color: u8) {
+#[pyo3(signature = (x, y, s, color, font=None))]
+fn text(x: f32, y: f32, s: &str, color: u8, font: Option<pyo3::PyRef<PyFont>>) {
     unsafe {
         if PYXEL_READY {
-            pyxel_core::pyxel().draw_text(x, y, s, color, None);
+            let font_ref = font.as_ref().map(|f| &f.inner);
+            pyxel_core::pyxel().draw_text(x, y, s, color, font_ref);
         }
     }
 }
