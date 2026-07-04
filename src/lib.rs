@@ -1798,8 +1798,28 @@ impl PyMusic {
         unsafe { (&mut *self.rc().get()).set(&seqs); }
     }
 
-    // set(*seqs) — variable args, each arg is a list of sound indices
-    fn set(&self, seqs: Vec<Vec<u32>>) -> PyResult<()> {
+    // set(seq0, seq1, ...) — each arg is a list of sound indices for that channel
+    // Also accepts a single Vec<Vec<u32>> for compatibility
+    #[pyo3(signature = (*args))]
+    fn set(&self, args: pyo3::Bound<'_, pyo3::types::PyTuple>) -> PyResult<()> {
+        let seqs: Vec<Vec<u32>> = if args.len() == 1 {
+            let first = args.get_item(0)?;
+            if let Ok(v) = first.extract::<Vec<Vec<u32>>>() {
+                v
+            } else if let Ok(v) = first.extract::<Vec<u32>>() {
+                vec![v]
+            } else {
+                return Err(pyo3::exceptions::PyTypeError::new_err("Invalid argument"));
+            }
+        } else {
+            let mut seqs = Vec::new();
+            for i in 0..args.len() {
+                let item = args.get_item(i)?;
+                let seq = item.extract::<Vec<u32>>()?;
+                seqs.push(seq);
+            }
+            seqs
+        };
         unsafe { (&mut *self.rc().get()).set(&seqs); }
         Ok(())
     }
