@@ -1069,11 +1069,25 @@ impl PyImage {
 impl PyImage {
     #[new]
     fn new(width: u32, height: u32) -> Self {
-        // Create a standalone Image and store it in the first available bank
-        // For simplicity, we use bank 0 as a scratch buffer when constructing
-        // NOTE: This is a simplification; full impl needs dynamic storage
         let _ = (width, height);
         PyImage { bank: 0 }
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (filename, include_colors=None))]
+    fn from_image(filename: &str, include_colors: Option<bool>) -> PyResult<Self> {
+        // Load image into bank 0 as a temporary holder
+        // Full implementation would require dynamic storage
+        unsafe {
+            if PYXEL_READY {
+                let imgs = pyxel_core::images();
+                let rc = &imgs[0];
+                let img = &mut *rc.get();
+                img.load(0, 0, filename, include_colors)
+                    .map_err(pyo3::exceptions::PyException::new_err)?;
+            }
+        }
+        Ok(PyImage { bank: 0 })
     }
 
     #[getter]
@@ -1253,6 +1267,30 @@ impl PyImageList {
         }
         Ok(PyImage { bank: idx })
     }
+
+    fn __setitem__(&self, idx: usize, val: pyo3::PyRef<PyImage>) -> PyResult<()> {
+        if idx >= pyxel_core::NUM_IMAGES as usize {
+            return Err(pyo3::exceptions::PyIndexError::new_err(
+                format!("image bank index {idx} out of range")
+            ));
+        }
+        // Copy pixel data from val.bank to idx bank
+        unsafe {
+            let src_rc = pyxel_core::images()[val.bank].clone();
+            let dst_rc = &pyxel_core::images()[idx];
+            let src = &*src_rc.get();
+            let dst = &mut *dst_rc.get();
+            let w = src.width() as usize;
+            let h = src.height() as usize;
+            for y in 0..h {
+                for x in 0..w {
+                    let col = src.pixel(x as f32, y as f32);
+                    dst.set_pixel(x as f32, y as f32, col);
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1425,6 +1463,21 @@ impl PyTilemap {
 
 #[pymethods]
 impl PyTilemap {
+    #[staticmethod]
+    fn from_tmx(filename: &str, layer: u32) -> PyResult<Self> {
+        // Load TMX into bank 0 as a temporary holder
+        unsafe {
+            if PYXEL_READY {
+                let tms = pyxel_core::tilemaps();
+                let rc = &tms[0];
+                let tm = &mut *rc.get();
+                tm.load(0, 0, filename, layer)
+                    .map_err(pyo3::exceptions::PyException::new_err)?;
+            }
+        }
+        Ok(PyTilemap { bank: 0 })
+    }
+
     #[getter]
     fn width(&self) -> u32 {
         unsafe { (&*self.rc().get()).width() }
@@ -1584,6 +1637,30 @@ impl PyTilemapList {
             ));
         }
         Ok(PyTilemap { bank: idx })
+    }
+
+    fn __setitem__(&self, idx: usize, val: pyo3::PyRef<PyTilemap>) -> PyResult<()> {
+        if idx >= pyxel_core::NUM_TILEMAPS as usize {
+            return Err(pyo3::exceptions::PyIndexError::new_err(
+                format!("tilemap bank index {idx} out of range")
+            ));
+        }
+        unsafe {
+            let src_rc = pyxel_core::tilemaps()[val.bank].clone();
+            let dst_rc = &pyxel_core::tilemaps()[idx];
+            let src = &*src_rc.get();
+            let dst = &mut *dst_rc.get();
+            let w = src.width() as usize;
+            let h = src.height() as usize;
+            for y in 0..h {
+                for x in 0..w {
+                    let tile = src.tile(x as f32, y as f32);
+                    dst.set_tile(x as f32, y as f32, tile);
+                }
+            }
+            dst.imgsrc = src.imgsrc.clone();
+        }
+        Ok(())
     }
 }
 
