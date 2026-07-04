@@ -54,8 +54,8 @@ static mut INPUT_STATE: Option<unsafe extern "C" fn(c_uint, c_uint, c_uint, c_ui
 static mut ENVIRON_CB:  Option<unsafe extern "C" fn(c_uint, *mut c_void) -> bool>             = None;
 
 // Screen dimensions
-const SCREEN_W: u32 = 128;
-const SCREEN_H: u32 = 128;
+const SCREEN_W: u32 = 256;
+const SCREEN_H: u32 = 256;
 const FPS: u32      = 60;
 
 // Game-requested FPS (set by pyxel.init(), default 30)
@@ -2109,6 +2109,84 @@ pub unsafe extern "C" fn retro_deinit() {
 
 // Extract a .pyxapp (ZIP) file to a temporary directory and return the path
 // to the startup script (.pyxapp_startup_script contains its relative path).
+// ---------------------------------------------------------------------------
+// Static analysis: extract pyxel.init() arguments from script
+// ---------------------------------------------------------------------------
+
+// Parse pyxel.init(w, h, ..., fps=N, ...) from a Python script.
+// Returns (width, height, fps) if found, None otherwise.
+fn parse_pyxel_init(script: &str) -> Option<(u32, u32, u32)> {
+    // Find pyxel.init( or init( call
+    let search_patterns = ["pyxel.init(", "pyxel.init ("];
+    let mut start = None;
+    for pat in &search_patterns {
+        if let Some(pos) = script.find(pat) {
+            start = Some(pos + pat.len());
+            break;
+        }
+    }
+    let start = start?;
+
+    // Extract the argument string up to the closing paren
+    let rest = &script[start..];
+    let mut depth = 1;
+    let mut end = 0;
+    for (i, c) in rest.char_indices() {
+        match c {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    end = i;
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let args_str = &rest[..end];
+
+    // Parse positional and keyword arguments
+    let mut w: Option<u32> = None;
+    let mut h: Option<u32> = None;
+    let mut fps: Option<u32> = None;
+
+    let parts: Vec<&str> = args_str.split(',').collect();
+    let mut positional = 0;
+    for part in &parts {
+        let part = part.trim();
+        if part.is_empty() { continue; }
+
+        if let Some(kv) = part.split_once('=') {
+            let key = kv.0.trim();
+            let val = kv.1.trim().parse::<u32>().ok();
+            match key {
+                "w" | "width"  => w = val,
+                "h" | "height" => h = val,
+                "fps"          => fps = val,
+                _ => {}
+            }
+        } else if let Ok(n) = part.parse::<u32>() {
+            match positional {
+                0 => w = Some(n),
+                1 => h = Some(n),
+                3 => fps = Some(n),
+                _ => {}
+            }
+            positional += 1;
+        } else {
+            positional += 1;
+        }
+    }
+
+    match (w, h) {
+        (Some(w), Some(h)) if w > 0 && h > 0 => {
+            Some((w, h, fps.unwrap_or(30)))
+        }
+        _ => None
+    }
+}
+
 fn extract_pyxapp(pyxapp_path: &str) -> Option<String> {
 
     let file = std::fs::File::open(pyxapp_path).ok()?;
@@ -2200,6 +2278,28 @@ pub unsafe extern "C" fn retro_load_game(game: *const c_void) -> bool {
     } else {
         path.clone()
     };
+
+    // Static analysis: parse pyxel.init() args BEFORE running the script
+    // to set the correct screen size and fps (problem⑤)
+    if let Ok(code) = std::fs::read_to_string(&script_path) {
+        if let Some((w, h, fps)) = parse_pyxel_init(&code) {
+            GAME_W   = w;
+            GAME_H   = h;
+            GAME_FPS = fps;
+        }
+    }
+
+    // Notify RetroArch of geometry with parsed size
+    if let Some(env) = ENVIRON_CB {
+        let geometry = rust_libretro_sys::retro_game_geometry {
+            base_width:   GAME_W,
+            base_height:  GAME_H,
+            max_width:    256,
+            max_height:   256,
+            aspect_ratio: GAME_W as f32 / GAME_H as f32,
+        };
+        env(37, &geometry as *const _ as *mut c_void);
+    }
 
     Python::with_gil(|py| {
         // Drop previous game callbacks inside GIL to avoid double-free
