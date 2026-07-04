@@ -1632,6 +1632,11 @@ impl PyChannel {
 
 #[pymethods]
 impl PyChannel {
+    #[new]
+    fn new() -> Self {
+        PyChannel { bank: 0 }
+    }
+
     #[getter]
     fn gain(&self) -> pyxel_core::ChannelGain {
         unsafe { (&*self.rc().get()).gain }
@@ -1694,6 +1699,35 @@ impl PyChannelList {
         }
         Ok(PyChannel { bank: idx })
     }
+
+    fn __setitem__(&self, idx: pyo3::Bound<'_, pyo3::PyAny>, val: pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<()> {
+        if let Ok(i) = idx.extract::<usize>() {
+            // Single index assignment: channels[n] = channel
+            if i >= pyxel_core::NUM_CHANNELS as usize {
+                return Err(pyo3::exceptions::PyIndexError::new_err("channel index out of range"));
+            }
+            let ch = val.extract::<pyo3::PyRef<PyChannel>>()?;
+            unsafe {
+                let src = &*ch.rc().get();
+                let dst = &mut *pyxel_core::channels()[i].get();
+                dst.gain   = src.gain;
+                dst.detune = src.detune;
+            }
+        } else {
+            // Slice assignment: channels[:] = [ch0, ch1, ...]
+            let items = val.extract::<Vec<pyo3::PyRef<PyChannel>>>()?;
+            for (i, ch) in items.iter().enumerate() {
+                if i >= pyxel_core::NUM_CHANNELS as usize { break; }
+                unsafe {
+                    let src = &*ch.rc().get();
+                    let dst = &mut *pyxel_core::channels()[i].get();
+                    dst.gain   = src.gain;
+                    dst.detune = src.detune;
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1713,6 +1747,11 @@ impl PyTone {
 
 #[pymethods]
 impl PyTone {
+    #[new]
+    fn new() -> Self {
+        PyTone { bank: 0 }
+    }
+
     #[getter]
     fn mode(&self) -> u32 {
         unsafe { (&*self.rc().get()).mode.into() }
@@ -1766,6 +1805,38 @@ impl PyToneList {
             ));
         }
         Ok(PyTone { bank: idx })
+    }
+
+    fn __setitem__(&self, idx: pyo3::Bound<'_, pyo3::PyAny>, val: pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<()> {
+        if let Ok(i) = idx.extract::<usize>() {
+            if i >= pyxel_core::NUM_TONES as usize {
+                return Err(pyo3::exceptions::PyIndexError::new_err("tone index out of range"));
+            }
+            let tone = val.extract::<pyo3::PyRef<PyTone>>()?;
+            unsafe {
+                let src = &*tone.rc().get();
+                let dst = &mut *pyxel_core::tones()[i].get();
+                dst.mode        = src.mode;
+                dst.sample_bits = src.sample_bits;
+                dst.gain        = src.gain;
+                dst.wavetable   = src.wavetable.clone();
+            }
+        } else {
+            // Slice assignment: tones[:] = [t0, t1, ...]
+            let items = val.extract::<Vec<pyo3::PyRef<PyTone>>>()?;
+            for (i, tone) in items.iter().enumerate() {
+                if i >= pyxel_core::NUM_TONES as usize { break; }
+                unsafe {
+                    let src = &*tone.rc().get();
+                    let dst = &mut *pyxel_core::tones()[i].get();
+                    dst.mode        = src.mode;
+                    dst.sample_bits = src.sample_bits;
+                    dst.gain        = src.gain;
+                    dst.wavetable   = src.wavetable.clone();
+                }
+            }
+        }
+        Ok(())
     }
 }
 
