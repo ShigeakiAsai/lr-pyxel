@@ -2498,6 +2498,7 @@ pub unsafe extern "C" fn retro_load_game(game: *const c_void) -> bool {
         // Reset frame counters for new content
         RETRO_FRAME_COUNT = 0;
         LR_FRAME_COUNT    = 0;
+        PREV_BUTTONS      = 0;
 
         // Clear cached modules from previous game to prevent import conflicts.
         // Without this, modules like 'constants' from game A would be reused
@@ -2505,19 +2506,23 @@ pub unsafe extern "C" fn retro_load_game(game: *const c_void) -> bool {
         if let Ok(sys) = pyo3::Python::import_bound(py, "sys") {
             if let Ok(modules) = sys.getattr("modules") {
                 if let Ok(modules_dict) = modules.downcast_into::<pyo3::types::PyDict>() {
-                    // Keep only stdlib and built-in modules, remove game modules
+                    // Remove only game-specific modules (those loaded from /tmp/lr-pyxel/)
+                    // Keep all stdlib modules to avoid breaking imports like 'from collections import deque'
                     let keys_to_remove: Vec<String> = modules_dict
-                        .keys()
+                        .items()
                         .iter()
-                        .filter_map(|k| k.extract::<String>().ok())
-                        .filter(|k| {
-                            !k.starts_with('_')
-                                && !matches!(k.as_str(),
-                                    "sys" | "builtins" | "pyxel" | "os" | "os.path"
-                                    | "io" | "abc" | "types" | "typing" | "functools"
-                                    | "collections" | "itertools" | "operator"
-                                    | "re" | "enum" | "warnings" | "weakref"
-                                )
+                        .filter_map(|item| {
+                            let key = item.get_item(0).ok()?.extract::<String>().ok()?;
+                            let val = item.get_item(1).ok()?;
+                            // Check if module's __file__ is under /tmp/lr-pyxel/
+                            if let Ok(file) = val.getattr("__file__") {
+                                if let Ok(path) = file.extract::<String>() {
+                                    if path.contains("/tmp/lr-pyxel/") {
+                                        return Some(key);
+                                    }
+                                }
+                            }
+                            None
                         })
                         .collect();
                     for key in keys_to_remove {
@@ -2651,6 +2656,9 @@ pub unsafe extern "C" fn retro_run() {
     let step = (FPS / GAME_FPS).max(1) as u64;
     let should_update = RETRO_FRAME_COUNT % step == 0;
 
+    // Always process input every frame so btnp() edge detection works correctly
+    inject_input(buttons);
+
     if unsafe { PY_UPDATE.is_some() || PY_DRAW.is_some() } {
         if should_update {
             // Increment lr-pyxel's frame_count (returned by pyxel.frame_count)
@@ -2668,9 +2676,6 @@ pub unsafe extern "C" fn retro_run() {
             // 5. Advance Pyxel's internal audio clock only when game updates.
             //    This keeps audio speed in sync with game speed.
             pyxel_core::pyxel().flip_screen();
-
-            // 6. Inject input AFTER flip_screen()
-            inject_input(buttons);
 
             // 8. Render and submit audio samples (only on game frames)
             submit_audio_frame();
