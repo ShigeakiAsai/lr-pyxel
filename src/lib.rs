@@ -2483,6 +2483,34 @@ pub unsafe extern "C" fn retro_load_game(game: *const c_void) -> bool {
         PY_UPDATE = None;
         PY_DRAW   = None;
 
+        // Clear cached modules from previous game to prevent import conflicts.
+        // Without this, modules like 'constants' from game A would be reused
+        // when game B tries to import its own 'constants' module.
+        if let Ok(sys) = pyo3::Python::import_bound(py, "sys") {
+            if let Ok(modules) = sys.getattr("modules") {
+                if let Ok(modules_dict) = modules.downcast_into::<pyo3::types::PyDict>() {
+                    // Keep only stdlib and built-in modules, remove game modules
+                    let keys_to_remove: Vec<String> = modules_dict
+                        .keys()
+                        .iter()
+                        .filter_map(|k| k.extract::<String>().ok())
+                        .filter(|k| {
+                            !k.starts_with('_')
+                                && !matches!(k.as_str(),
+                                    "sys" | "builtins" | "pyxel" | "os" | "os.path"
+                                    | "io" | "abc" | "types" | "typing" | "functools"
+                                    | "collections" | "itertools" | "operator"
+                                    | "re" | "enum" | "warnings" | "weakref"
+                                )
+                        })
+                        .collect();
+                    for key in keys_to_remove {
+                        let _ = modules_dict.del_item(key);
+                    }
+                }
+            }
+        }
+
         // Stop all audio and reset BlipBuf to prevent previous content's
         // audio from bleeding into the next content (problem②)
         if PYXEL_READY {
@@ -2496,10 +2524,26 @@ pub unsafe extern "C" fn retro_load_game(game: *const c_void) -> bool {
             );
         }
 
-        // Add game directory to sys.path and set as working directory
+        // Add game directory to sys.path and set as working directory.
+        // First, remove any previous game directories from sys.path to prevent
+        // module name conflicts between different games (problem: laser-jetman
+        // importing cursed_caverns' constants.py)
         let sys     = py.import_bound("sys").expect("failed to import sys");
         let syspath = sys.getattr("path").unwrap();
         let syspath = syspath.downcast_into::<pyo3::types::PyList>().unwrap();
+
+        // Remove all /tmp/lr-pyxel/ entries from sys.path
+        let mut i = 0;
+        while i < syspath.len() {
+            if let Ok(s) = syspath.get_item(i).and_then(|item| item.extract::<String>()) {
+                if s.contains("/tmp/lr-pyxel/") || s.contains("\\tmp\\lr-pyxel\\") {
+                    let _ = syspath.del_item(i);
+                    continue;
+                }
+            }
+            i += 1;
+        }
+
         let game_dir = std::path::Path::new(&script_path)
             .parent()
             .unwrap_or(std::path::Path::new("."))
