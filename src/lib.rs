@@ -1208,33 +1208,133 @@ impl PyImageList {
 // Sound bank wrapper (pyxel.sounds[n])
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Sound wrapper (sound_wrapper.rs)
+// ---------------------------------------------------------------------------
+
 #[pyclass(name = "Sound")]
 struct PySound {
     bank: usize,
 }
 
+impl PySound {
+    fn rc(&self) -> &pyxel_core::RcSound {
+        &pyxel_core::sounds()[self.bank]
+    }
+}
+
 #[pymethods]
 impl PySound {
-    fn set(&self, notes: &str, tones: &str, volumes: &str, effects: &str, speed: u16) -> PyResult<()> {
+    #[getter]
+    fn notes(&self) -> Vec<pyxel_core::SoundNote> {
+        unsafe { (&*self.rc().get()).notes.clone() }
+    }
+
+    #[setter]
+    fn set_notes_list(&self, notes: Vec<pyxel_core::SoundNote>) {
+        unsafe { (&mut *self.rc().get()).notes = notes; }
+    }
+
+    #[getter]
+    fn tones(&self) -> Vec<pyxel_core::SoundTone> {
+        unsafe { (&*self.rc().get()).tones.clone() }
+    }
+
+    #[setter]
+    fn set_tones_list(&self, tones: Vec<pyxel_core::SoundTone>) {
+        unsafe { (&mut *self.rc().get()).tones = tones; }
+    }
+
+    #[getter]
+    fn volumes(&self) -> Vec<pyxel_core::SoundVolume> {
+        unsafe { (&*self.rc().get()).volumes.clone() }
+    }
+
+    #[setter]
+    fn set_volumes_list(&self, volumes: Vec<pyxel_core::SoundVolume>) {
+        unsafe { (&mut *self.rc().get()).volumes = volumes; }
+    }
+
+    #[getter]
+    fn effects(&self) -> Vec<pyxel_core::SoundEffect> {
+        unsafe { (&*self.rc().get()).effects.clone() }
+    }
+
+    #[setter]
+    fn set_effects_list(&self, effects: Vec<pyxel_core::SoundEffect>) {
+        unsafe { (&mut *self.rc().get()).effects = effects; }
+    }
+
+    #[getter]
+    fn speed(&self) -> pyxel_core::SoundSpeed {
+        unsafe { (&*self.rc().get()).speed }
+    }
+
+    #[setter]
+    fn set_speed(&self, speed: pyxel_core::SoundSpeed) {
+        unsafe { (&mut *self.rc().get()).speed = speed; }
+    }
+
+    fn set(&self, notes: &str, tones: &str, volumes: &str, effects: &str, speed: pyxel_core::SoundSpeed) -> PyResult<()> {
         unsafe {
-            if !PYXEL_READY { return Ok(()); }
-            let snds = pyxel_core::sounds();
-            let rc = &snds[self.bank];
-            let snd = &mut *rc.get();
-            snd.set(notes, tones, volumes, effects, speed)
-                .map_err(pyo3::exceptions::PyValueError::new_err)
+            (&mut *self.rc().get())
+                .set(notes, tones, volumes, effects, speed)
+                .map_err(pyo3::exceptions::PyException::new_err)
         }
     }
 
-    fn mml(&self, code: &str) -> PyResult<()> {
+    fn set_notes(&self, notes: &str) -> PyResult<()> {
         unsafe {
-            if !PYXEL_READY { return Ok(()); }
-            let snds = pyxel_core::sounds();
-            let rc = &snds[self.bank];
-            let snd = &mut *rc.get();
-            snd.set_mml(code)
-                .map_err(pyo3::exceptions::PyValueError::new_err)
+            (&mut *self.rc().get()).set_notes(notes)
+                .map_err(pyo3::exceptions::PyException::new_err)
         }
+    }
+
+    fn set_tones(&self, tones: &str) -> PyResult<()> {
+        unsafe {
+            (&mut *self.rc().get()).set_tones(tones)
+                .map_err(pyo3::exceptions::PyException::new_err)
+        }
+    }
+
+    fn set_volumes(&self, volumes: &str) -> PyResult<()> {
+        unsafe {
+            (&mut *self.rc().get()).set_volumes(volumes)
+                .map_err(pyo3::exceptions::PyException::new_err)
+        }
+    }
+
+    fn set_effects(&self, effects: &str) -> PyResult<()> {
+        unsafe {
+            (&mut *self.rc().get()).set_effects(effects)
+                .map_err(pyo3::exceptions::PyException::new_err)
+        }
+    }
+
+    #[pyo3(signature = (code=None))]
+    fn mml(&self, code: Option<&str>) -> PyResult<()> {
+        unsafe {
+            let snd = &mut *self.rc().get();
+            match code {
+                None => { snd.clear_mml(); Ok(()) }
+                Some(c) => snd.set_mml(c).map_err(pyo3::exceptions::PyException::new_err)
+            }
+        }
+    }
+
+    #[pyo3(signature = (filename=None))]
+    fn pcm(&self, filename: Option<&str>) -> PyResult<()> {
+        unsafe {
+            let snd = &mut *self.rc().get();
+            match filename {
+                None => { snd.clear_pcm(); Ok(()) }
+                Some(f) => snd.load_pcm(f).map_err(pyo3::exceptions::PyException::new_err)
+            }
+        }
+    }
+
+    fn total_sec(&self) -> Option<f32> {
+        unsafe { (&*self.rc().get()).total_seconds() }
     }
 }
 
