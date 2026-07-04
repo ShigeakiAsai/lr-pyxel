@@ -1465,6 +1465,79 @@ impl PyFont {
 }
 
 // ---------------------------------------------------------------------------
+// Tone wrapper (tone_wrapper.rs)
+// ---------------------------------------------------------------------------
+
+#[pyclass(name = "Tone")]
+struct PyTone {
+    bank: usize,
+}
+
+impl PyTone {
+    fn rc(&self) -> &pyxel_core::RcTone {
+        &pyxel_core::tones()[self.bank]
+    }
+}
+
+#[pymethods]
+impl PyTone {
+    #[getter]
+    fn mode(&self) -> u32 {
+        unsafe { (&*self.rc().get()).mode.into() }
+    }
+
+    #[setter]
+    fn set_mode(&self, mode: u32) {
+        unsafe { (&mut *self.rc().get()).mode = pyxel_core::ToneMode::from(mode); }
+    }
+
+    #[getter]
+    fn sample_bits(&self) -> u32 {
+        unsafe { (&*self.rc().get()).sample_bits }
+    }
+
+    #[setter]
+    fn set_sample_bits(&self, sample_bits: u32) {
+        unsafe { (&mut *self.rc().get()).sample_bits = sample_bits; }
+    }
+
+    #[getter]
+    fn gain(&self) -> pyxel_core::ToneGain {
+        unsafe { (&*self.rc().get()).gain }
+    }
+
+    #[setter]
+    fn set_gain(&self, gain: pyxel_core::ToneGain) {
+        unsafe { (&mut *self.rc().get()).gain = gain; }
+    }
+
+    #[getter]
+    fn wavetable(&self) -> Vec<pyxel_core::ToneSample> {
+        unsafe { (&*self.rc().get()).wavetable.clone() }
+    }
+
+    #[setter]
+    fn set_wavetable(&self, wavetable: Vec<pyxel_core::ToneSample>) {
+        unsafe { (&mut *self.rc().get()).wavetable = wavetable; }
+    }
+}
+
+#[pyclass(name = "ToneList")]
+struct PyToneList;
+
+#[pymethods]
+impl PyToneList {
+    fn __getitem__(&self, idx: usize) -> PyResult<PyTone> {
+        if idx >= pyxel_core::NUM_TONES as usize {
+            return Err(pyo3::exceptions::PyIndexError::new_err(
+                format!("tone bank index {idx} out of range")
+            ));
+        }
+        Ok(PyTone { bank: idx })
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Music bank wrapper (pyxel.musics[n])
 // ---------------------------------------------------------------------------
 
@@ -1532,6 +1605,7 @@ fn __getattr__(py: Python, name: &str) -> PyResult<Py<PyAny>> {
         // Audio
         "sounds"   => PySoundList.into_py(py),
         "musics"   => PyMusicList.into_py(py),
+        "tones"    => PyToneList.into_py(py),
         _ => return Err(pyo3::exceptions::PyAttributeError::new_err(
             format!("module 'pyxel' has no attribute '{name}'")
         )),
@@ -1639,6 +1713,8 @@ fn pyxel(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyMusicList>()?;
     m.add_class::<PyTilemap>()?;
     m.add_class::<PyTilemapList>()?;
+    m.add_class::<PyTone>()?;
+    m.add_class::<PyToneList>()?;
 
     Ok(())
 }
