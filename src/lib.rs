@@ -2299,7 +2299,27 @@ pub unsafe extern "C" fn retro_deinit() {
 // Parse pyxel.init(w, h, ..., fps=N, ...) from a Python script.
 // Returns (width, height, fps) if found, None otherwise.
 fn parse_pyxel_init(script: &str) -> Option<(u32, u32, u32)> {
-    // Find pyxel.init( or init( call
+    // First, build a map of simple variable assignments (VAR = NUMBER)
+    // e.g. SCREEN_W = 40, SCREEN_H = 50, FPS = 20
+    let mut var_map: std::collections::HashMap<&str, u32> = std::collections::HashMap::new();
+    for line in script.lines() {
+        let line = line.trim();
+        if let Some(eq_pos) = line.find('=') {
+            let key = line[..eq_pos].trim();
+            let val_str = line[eq_pos+1..].trim();
+            // Only handle simple identifier = number
+            if key.chars().all(|c| c.is_alphanumeric() || c == '_')
+                && !key.is_empty()
+                && !key.contains(' ')
+            {
+                if let Ok(n) = val_str.parse::<u32>() {
+                    var_map.insert(key, n);
+                }
+            }
+        }
+    }
+
+    // Find pyxel.init( call
     let search_patterns = ["pyxel.init(", "pyxel.init ("];
     let mut start = None;
     for pat in &search_patterns {
@@ -2329,6 +2349,16 @@ fn parse_pyxel_init(script: &str) -> Option<(u32, u32, u32)> {
     }
     let args_str = &rest[..end];
 
+    // Helper: resolve value (number literal or variable name)
+    let resolve = |s: &str| -> Option<u32> {
+        let s = s.trim();
+        if let Ok(n) = s.parse::<u32>() {
+            Some(n)
+        } else {
+            var_map.get(s).copied()
+        }
+    };
+
     // Parse positional and keyword arguments
     let mut w: Option<u32> = None;
     let mut h: Option<u32> = None;
@@ -2342,22 +2372,21 @@ fn parse_pyxel_init(script: &str) -> Option<(u32, u32, u32)> {
 
         if let Some(kv) = part.split_once('=') {
             let key = kv.0.trim();
-            let val = kv.1.trim().parse::<u32>().ok();
+            let val = resolve(kv.1.trim());
             match key {
                 "w" | "width"  => w = val,
                 "h" | "height" => h = val,
                 "fps"          => fps = val,
                 _ => {}
             }
-        } else if let Ok(n) = part.parse::<u32>() {
+        } else {
+            let val = resolve(part);
             match positional {
-                0 => w = Some(n),
-                1 => h = Some(n),
-                3 => fps = Some(n),
+                0 => w = val,
+                1 => h = val,
+                3 => fps = val,
                 _ => {}
             }
-            positional += 1;
-        } else {
             positional += 1;
         }
     }
@@ -2366,8 +2395,37 @@ fn parse_pyxel_init(script: &str) -> Option<(u32, u32, u32)> {
         (Some(w), Some(h)) if w > 0 && h > 0 => {
             Some((w, h, fps.unwrap_or(30)))
         }
-        _ => None
+        _ => {
+            // Fallback: just extract fps= from the args string directly
+            if let Some(fps_val) = extract_fps_from_args(args_str, &var_map) {
+                // Return with default size if w/h not found
+                // At minimum update GAME_FPS even if size is unknown
+                fps = Some(fps_val);
+            }
+            match (w, h) {
+                (Some(w), Some(h)) if w > 0 && h > 0 => Some((w, h, fps.unwrap_or(30))),
+                _ => fps.map(|f| (128, 128, f)), // unknown size but known fps
+            }
+        }
     }
+}
+
+fn extract_fps_from_args(args: &str, var_map: &std::collections::HashMap<&str, u32>) -> Option<u32> {
+    for line in args.lines() {
+        let line = line.trim().trim_end_matches(',');
+        if let Some(kv) = line.split_once('=') {
+            if kv.0.trim() == "fps" {
+                let val = kv.1.trim();
+                if let Ok(n) = val.parse::<u32>() {
+                    return Some(n);
+                }
+                if let Some(&n) = var_map.get(val) {
+                    return Some(n);
+                }
+            }
+        }
+    }
+    None
 }
 
 fn extract_pyxapp(pyxapp_path: &str) -> Option<String> {
