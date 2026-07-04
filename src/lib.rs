@@ -1722,24 +1722,37 @@ impl PyToneList {
 // Music bank wrapper (pyxel.musics[n])
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Music wrapper (music_wrapper.rs)
+// ---------------------------------------------------------------------------
+
 #[pyclass(name = "Music")]
 struct PyMusic {
     bank: usize,
 }
 
+impl PyMusic {
+    fn rc(&self) -> &pyxel_core::RcMusic {
+        &pyxel_core::musics()[self.bank]
+    }
+}
+
 #[pymethods]
 impl PyMusic {
-    // set(ch0, ch1, ch2, ch3) — each arg is a list of sound indices for that channel
-    #[pyo3(signature = (ch0=vec![], ch1=vec![], ch2=vec![], ch3=vec![]))]
-    fn set(&self, ch0: Vec<u32>, ch1: Vec<u32>, ch2: Vec<u32>, ch3: Vec<u32>) -> PyResult<()> {
-        unsafe {
-            if !PYXEL_READY { return Ok(()); }
-            let mscs = pyxel_core::musics();
-            let rc = &mscs[self.bank];
-            let msc = &mut *rc.get();
-            msc.set(&[ch0, ch1, ch2, ch3]);
-            Ok(())
-        }
+    #[getter]
+    fn seqs(&self) -> Vec<Vec<u32>> {
+        unsafe { (&*self.rc().get()).seqs.clone() }
+    }
+
+    #[setter]
+    fn set_seqs(&self, seqs: Vec<Vec<u32>>) {
+        unsafe { (&mut *self.rc().get()).set(&seqs); }
+    }
+
+    // set(*seqs) — variable args, each arg is a list of sound indices
+    fn set(&self, seqs: Vec<Vec<u32>>) -> PyResult<()> {
+        unsafe { (&mut *self.rc().get()).set(&seqs); }
+        Ok(())
     }
 }
 
