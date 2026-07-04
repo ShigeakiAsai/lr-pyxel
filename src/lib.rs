@@ -2206,6 +2206,19 @@ pub unsafe extern "C" fn retro_load_game(game: *const c_void) -> bool {
         PY_UPDATE = None;
         PY_DRAW   = None;
 
+        // Stop all audio and reset BlipBuf to prevent previous content's
+        // audio from bleeding into the next content (problem②)
+        if PYXEL_READY {
+            pyxel_core::pyxel().stop_all_channels();
+        }
+        if let Some(ref mut blip) = BLIP_BUF {
+            *blip = blip_buf::BlipBuf::new(1024);
+            blip.set_rates(
+                pyxel_core::AUDIO_CLOCK_RATE as f64,
+                pyxel_core::AUDIO_SAMPLE_RATE as f64,
+            );
+        }
+
         // Add game directory to sys.path and set as working directory
         let sys     = py.import_bound("sys").expect("failed to import sys");
         let syspath = sys.getattr("path").unwrap();
