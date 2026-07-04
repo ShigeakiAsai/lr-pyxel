@@ -424,10 +424,12 @@ fn sound_set(
 // play(ch, snd, sec=None, loop=False, resume=False)
 // snd can be a single sound index (u32) or a list of sound indices (Vec<u32>)
 #[pyfunction]
-#[pyo3(signature = (ch, snd, sec=None, r#loop=None, resume=None))]
-fn play(ch: u32, snd: pyo3::Bound<'_, pyo3::PyAny>, sec: Option<f32>, r#loop: Option<bool>, resume: Option<bool>) -> PyResult<()> {
+#[pyo3(signature = (ch, snd, sec=None, r#loop=None, resume=None, tick=None))]
+fn play(ch: u32, snd: pyo3::Bound<'_, pyo3::PyAny>, sec: Option<f32>, r#loop: Option<bool>, resume: Option<bool>, tick: Option<u32>) -> PyResult<()> {
     unsafe {
         if !PYXEL_READY { return Ok(()); }
+        // tick is deprecated, convert to sec (120 ticks/sec)
+        let sec = sec.or_else(|| tick.map(|t| t as f32 / 120.0));
         let should_loop   = r#loop.unwrap_or(false);
         let should_resume = resume.unwrap_or(false);
         if let Ok(idx) = snd.extract::<u32>() {
@@ -2505,19 +2507,26 @@ pub unsafe extern "C" fn retro_load_game(game: *const c_void) -> bool {
         if let Ok(sys) = pyo3::Python::import_bound(py, "sys") {
             if let Ok(modules) = sys.getattr("modules") {
                 if let Ok(modules_dict) = modules.downcast_into::<pyo3::types::PyDict>() {
-                    // Keep only stdlib and built-in modules, remove game modules
+                    // Explicitly remove math and random so our stubs in
+                    // /tmp/lr-pyxel-stdlib/ are loaded instead of the .so versions
+                    let _ = modules_dict.del_item("math");
+                    let _ = modules_dict.del_item("random");
+
+                    // Remove game-specific modules loaded from /tmp/lr-pyxel/
                     let keys_to_remove: Vec<String> = modules_dict
-                        .keys()
+                        .items()
                         .iter()
-                        .filter_map(|k| k.extract::<String>().ok())
-                        .filter(|k| {
-                            !k.starts_with('_')
-                                && !matches!(k.as_str(),
-                                    "sys" | "builtins" | "pyxel" | "os" | "os.path"
-                                    | "io" | "abc" | "types" | "typing" | "functools"
-                                    | "collections" | "itertools" | "operator"
-                                    | "re" | "enum" | "warnings" | "weakref"
-                                )
+                        .filter_map(|item| {
+                            let key = item.get_item(0).ok()?.extract::<String>().ok()?;
+                            let val = item.get_item(1).ok()?;
+                            if let Ok(file) = val.getattr("__file__") {
+                                if let Ok(path) = file.extract::<String>() {
+                                    if path.contains("/tmp/lr-pyxel/") {
+                                        return Some(key);
+                                    }
+                                }
+                            }
+                            None
                         })
                         .collect();
                     for key in keys_to_remove {
