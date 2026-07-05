@@ -72,7 +72,7 @@ pub unsafe extern "C" fn retro_get_system_info(info: *mut c_void) {
     let info = info as *mut rust_libretro_sys::retro_system_info;
     (*info).library_name     = b"Pyxel\0".as_ptr() as *const c_char;
     (*info).library_version  = b"0.5.0\0".as_ptr() as *const c_char;
-    (*info).valid_extensions = b"py|pyxapp\0".as_ptr() as *const c_char;
+    (*info).valid_extensions = b"pyxapp\0".as_ptr() as *const c_char;
     (*info).need_fullpath    = true;
     (*info).block_extract    = false;
 }
