@@ -152,12 +152,19 @@ fn pget(x: f32, y: f32) -> u8 {
 #[pyfunction]
 #[pyo3(signature = (x, y, img, u, v, w, h, colkey=None, rotate=None, scale=None))]
 #[allow(clippy::too_many_arguments)]
-fn blt(x: f32, y: f32, img: u32, u: f32, v: f32, w: f32, h: f32, colkey: Option<u8>, rotate: Option<f32>, scale: Option<f32>) {
+fn blt(x: f32, y: f32, img: pyo3::Bound<'_, pyo3::PyAny>, u: f32, v: f32, w: f32, h: f32, colkey: Option<u8>, rotate: Option<f32>, scale: Option<f32>) -> PyResult<()> {
     unsafe {
-        if PYXEL_READY {
-            pyxel_core::pyxel().draw_image(x, y, img, u, v, w, h, colkey, rotate, scale);
+        if !PYXEL_READY { return Ok(()); }
+        if let Ok(idx) = img.extract::<u32>() {
+            pyxel_core::pyxel().draw_image(x, y, idx, u, v, w, h, colkey, rotate, scale);
+        } else if let Ok(pyimg) = img.extract::<pyo3::PyRef<PyImage>>() {
+            let src = pyxel_core::images()[pyimg.bank].clone();
+            let screen = pyxel_core::screen();
+            let dst = &mut *screen.get();
+            dst.draw_image(x, y, &src, u, v, w, h, colkey, rotate, scale);
         }
     }
+    Ok(())
 }
 
 // bltm(x, y, tm, u, v, w, h, colkey=None, rotate=None, scale=None)
@@ -581,7 +588,6 @@ fn init(
 #[pyfunction]
 fn run(update: PyObject, draw: PyObject) {
     unsafe {
-        eprintln!("[lr-pyxel] pyxel.run() called, registering callbacks");
         PY_UPDATE = Some(update);
         PY_DRAW   = Some(draw);
     }
@@ -2237,6 +2243,14 @@ pub unsafe extern "C" fn retro_get_system_av_info(info: *mut c_void) {
 
 #[no_mangle]
 pub unsafe extern "C" fn retro_init() {
+    // Always write stubs (even on re-init) so they're up to date
+    const MATH_PY:   &str = include_str!("../math.py");
+    const RANDOM_PY: &str = include_str!("../random.py");
+    let stub_dir = std::path::Path::new("/tmp/lr-pyxel-stdlib");
+    let _ = std::fs::create_dir_all(stub_dir);
+    let _ = std::fs::write(stub_dir.join("math.py"),   MATH_PY);
+    let _ = std::fs::write(stub_dir.join("random.py"), RANDOM_PY);
+
     // Guard: only initialize once. RetroArch may call retro_init() again
     // when switching content without fully unloading the core.
     if PYXEL_READY {
