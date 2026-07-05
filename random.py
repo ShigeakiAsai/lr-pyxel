@@ -3,7 +3,6 @@
 # Does NOT import pyxel to avoid circular dependency issues.
 
 import os as _os
-import struct as _struct
 
 class _MT:
     """Minimal Mersenne Twister implementation."""
