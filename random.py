@@ -62,12 +62,30 @@ def sample(population, k):
     return result[:k]
 
 def gauss(mu=0.0, sigma=1.0):
-    # Box-Muller transform
-    import math
+    # Box-Muller transform using pyxel functions only (no math import)
+    _pi = 3.141592653589793
     u1 = _pyxel.rndf(1e-10, 1.0)
     u2 = _pyxel.rndf(0.0, 1.0)
-    z = math.sqrt(-2.0 * math.log(u1)) * math.cos(2.0 * math.pi * u2)
+    # pyxel.sin/cos use degrees, pyxel.sqrt available
+    r = _pyxel.sqrt(-2.0 * _log(u1))
+    theta_deg = 2.0 * _pi * u2 * 180.0 / _pi  # convert to degrees
+    z = r * _pyxel.cos(theta_deg)
     return mu + sigma * z
+
+def _log(x):
+    # Natural log without math module - using pyxel's atan2/sqrt
+    if x <= 0: raise ValueError("math domain error")
+    # ln(x) = 2 * sum((x-1)/(x+1))^(2k+1) / (2k+1)
+    y = (x - 1.0) / (x + 1.0)
+    y2 = y * y
+    result = 0.0
+    term = y
+    for i in range(1, 100, 2):
+        result += term / i
+        term *= y2
+        if abs(term / i) < 1e-12:
+            break
+    return 2.0 * result
 
 def triangular(low=0.0, high=1.0, mode=None):
     if mode is None:
@@ -79,8 +97,8 @@ def triangular(low=0.0, high=1.0, mode=None):
     return high - (high - low) * ((1 - u) * (1 - c)) ** 0.5
 
 def expovariate(lambd):
-    import math
-    return -math.log(1.0 - random()) / lambd
+    u = _pyxel.rndf(0.0, 1.0 - 1e-10)
+    return -_log(1.0 - u) / lambd
 
 def getrandbits(k):
     result = 0
