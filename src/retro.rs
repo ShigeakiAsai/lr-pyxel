@@ -72,7 +72,7 @@ pub unsafe extern "C" fn retro_get_system_info(info: *mut c_void) {
     let info = info as *mut rust_libretro_sys::retro_system_info;
     (*info).library_name     = b"Pyxel\0".as_ptr() as *const c_char;
     (*info).library_version  = b"0.5.0\0".as_ptr() as *const c_char;
-    (*info).valid_extensions = b"pyxapp\0".as_ptr() as *const c_char;
+    (*info).valid_extensions = b"py|pyxapp\0".as_ptr() as *const c_char;
     (*info).need_fullpath    = true;
     (*info).block_extract    = false;
 }
@@ -345,6 +345,16 @@ pub unsafe extern "C" fn retro_load_game(game: *const c_void) -> bool {
         } else {
             eprintln!("[lr-pyxel] parse_pyxel_init: not found, using defaults");
         }
+
+        // Update BlipBuf clock rate to match GAME_FPS.
+        // Scale the source clock rate so that flip_screen() (called at GAME_FPS)
+        // advances the audio at the correct speed.
+        // AUDIO_CLOCK_RATE is designed for 60fps; scale it down for slower games.
+        if let Some(ref mut blip) = BLIP_BUF {
+            let scaled_clock = pyxel_core::AUDIO_CLOCK_RATE as f64
+                * (GAME_FPS as f64 / FPS as f64);
+            blip.set_rates(scaled_clock, pyxel_core::AUDIO_SAMPLE_RATE as f64);
+        }
     }
 
     // Notify RetroArch of geometry with parsed size
@@ -525,7 +535,6 @@ pub unsafe extern "C" fn retro_run() {
 
     if unsafe { PY_UPDATE.is_some() || PY_DRAW.is_some() } {
         if should_update {
-            // Increment lr-pyxel's frame_count (returned by pyxel.frame_count)
             LR_FRAME_COUNT += 1;
 
             Python::with_gil(|py| {
@@ -537,16 +546,9 @@ pub unsafe extern "C" fn retro_run() {
                 }
             });
 
-            // 5. Advance Pyxel's internal audio clock only when game updates.
-            //    This keeps audio speed in sync with game speed.
             pyxel_core::pyxel().flip_screen();
-
-            // 6. Inject input AFTER flip_screen()
-            audio::inject_input(buttons);
-
-            // 8. Render and submit audio samples (only on game frames)
-            audio::submit_audio_frame();
         }
+
     } else {
         // No game loaded or splash period — show splash screen
         if SPLASH_COUNT < SPLASH_FRAMES {
@@ -557,7 +559,13 @@ pub unsafe extern "C" fn retro_run() {
         }
     }
 
-    // 7. Submit framebuffer to RetroArch every frame to keep display smooth
+    // Always inject input every frame
+    audio::inject_input(buttons);
+
+    // Always submit audio every frame (accumulator handles 367/368 alternation)
+    audio::submit_audio_frame();
+
+    // Submit framebuffer to RetroArch every frame to keep display smooth
     video::submit_pyxel_frame();
 }
 

@@ -1,7 +1,7 @@
 //! audio.rs — libretro audio output and input injection for lr-pyxel
 
 use crate::{
-    AUDIO_BATCH_CB, BLIP_BUF, AUDIO_SAMPLES_PER_FRAME,
+    AUDIO_BATCH_CB, BLIP_BUF,
     KEY_Z, KEY_X, KEY_S, KEY_RETURN, KEY_UP, KEY_DOWN, KEY_LEFT, KEY_RIGHT, KEY_A,
     GAMEPAD1_BUTTON_A, GAMEPAD1_BUTTON_B, GAMEPAD1_BUTTON_X,
     GAMEPAD1_BUTTON_BACK, GAMEPAD1_BUTTON_START,
@@ -13,21 +13,31 @@ use crate::{
 /// Previous frame's button bitmask — used to detect edges (press/release)
 pub static mut PREV_BUTTONS: u32 = 0;
 
+/// Sample accumulator to handle 22050/60 = 367.5 (alternates 367/368)
+static mut SAMPLE_ACCUMULATOR: f32 = 0.0;
+
 /// Render Pyxel's audio and submit to RetroArch's audio batch callback.
+/// Called every retro_run() frame (60fps) regardless of game fps.
 pub unsafe fn submit_audio_frame() {
     let Some(ref mut blip) = BLIP_BUF else { return; };
     let Some(audio_cb)     = AUDIO_BATCH_CB else { return; };
 
-    let mut mono = [0i16; AUDIO_SAMPLES_PER_FRAME];
+    // Accumulator: absorb the 0.5-sample-per-frame rounding error
+    // 22050 / 60 = 367.5 → alternates between 367 and 368 samples
+    SAMPLE_ACCUMULATOR += 22050.0 / 60.0;
+    let samples = SAMPLE_ACCUMULATOR.floor() as usize;
+    SAMPLE_ACCUMULATOR -= samples as f32;
+
+    let mut mono = vec![0i16; samples];
     pyxel_core::Audio::render_samples(pyxel_core::channels(), blip, &mut mono);
 
-    let mut stereo = [0i16; AUDIO_SAMPLES_PER_FRAME * 2];
+    let mut stereo = vec![0i16; samples * 2];
     for (i, &s) in mono.iter().enumerate() {
         stereo[i * 2]     = s;
         stereo[i * 2 + 1] = s;
     }
 
-    audio_cb(stereo.as_ptr(), AUDIO_SAMPLES_PER_FRAME);
+    audio_cb(stereo.as_ptr(), samples);
 }
 
 /// Translate libretro joypad bitmask to Pyxel key states.
