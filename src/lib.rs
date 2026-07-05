@@ -2274,6 +2274,26 @@ pub unsafe extern "C" fn retro_init() {
 
     // Start Python interpreter (after append_to_inittab)
     pyo3::prepare_freethreaded_python();
+
+    // Immediately after Python init: set up sys.path and remove cached .so modules
+    // so our stubs in /tmp/lr-pyxel-stdlib/ are loaded instead
+    Python::with_gil(|py| {
+        if let Ok(sys) = py.import_bound("sys") {
+            // Add stub dir to front of sys.path
+            if let Ok(path) = sys.getattr("path") {
+                if let Ok(syspath) = path.downcast_into::<pyo3::types::PyList>() {
+                    let _ = syspath.insert(0, "/tmp/lr-pyxel-stdlib");
+                }
+            }
+            // Remove math and random from sys.modules so our stubs are loaded
+            if let Ok(modules) = sys.getattr("modules") {
+                if let Ok(d) = modules.downcast_into::<pyo3::types::PyDict>() {
+                    let _ = d.del_item("math");
+                    let _ = d.del_item("random");
+                }
+            }
+        }
+    });
 }
 
 #[no_mangle]
