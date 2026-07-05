@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026-present Yasai-san
 
+mod video;
+
 use std::cmp::Ordering;
 use std::ffi::CStr;
 use std::os::raw::{c_char, c_uint, c_void};
@@ -2282,7 +2284,7 @@ pub unsafe extern "C" fn retro_init() {
     );
     BLIP_BUF = Some(blip);
 
-    build_palette_lut();
+    video::build_palette_lut();
     PYXEL_READY = true;
 
     // Start Python interpreter (after append_to_inittab)
@@ -2655,7 +2657,7 @@ pub unsafe extern "C" fn retro_run() {
     }
 
     if !PYXEL_READY {
-        submit_fallback_frame();
+        video::submit_fallback_frame();
         return;
     }
 
@@ -2696,22 +2698,14 @@ pub unsafe extern "C" fn retro_run() {
     }
 
     // 7. Submit framebuffer to RetroArch every frame to keep display smooth
-    submit_pyxel_frame();
+    video::submit_pyxel_frame();
 }
 
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-unsafe fn build_palette_lut() {
-    let pal = colors();
-    for (i, &rgb24) in pal.iter().enumerate().take(256) {
-        let r = ((rgb24 >> 16) & 0xFF) as u16;
-        let g = ((rgb24 >>  8) & 0xFF) as u16;
-        let b = ( rgb24        & 0xFF) as u16;
-        PALETTE_RGB565[i] = ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
-    }
-}
+// → moved to video.rs
 
 // Previous frame's button bitmask — used to detect edges (press/release)
 static mut PREV_BUTTONS: u32 = 0;
@@ -2757,38 +2751,9 @@ unsafe fn inject_input(buttons: u32) {
     PREV_BUTTONS = buttons;
 }
 
-unsafe fn submit_pyxel_frame() {
-    // Pyxel internal buffer is SCREEN_W x SCREEN_H (512x512).
-    // We submit only the GAME_W x GAME_H portion that the game requested
-    // via pyxel.init(), cropping the bottom-right if needed.
-    let src_w = *width()  as usize;  // Pyxel internal width (128)
-    let dst_w = (GAME_W as usize).min(src_w);
-    let dst_h = (GAME_H as usize).min(*height() as usize);
+// → moved to video.rs
 
-    let screen_rc = screen();
-    let src: *const u8 = (*screen_rc.get()).data_ptr() as *const u8;
-
-    // Build output framebuffer row by row
-    let mut fb = vec![0u16; dst_w * dst_h];
-    for y in 0..dst_h {
-        for x in 0..dst_w {
-            let idx = y * src_w + x;
-            fb[y * dst_w + x] = PALETTE_RGB565[*src.add(idx) as usize];
-        }
-    }
-
-    if let Some(video) = VIDEO_CB {
-        video(fb.as_ptr() as *const c_void, dst_w as c_uint, dst_h as c_uint, dst_w * 2);
-    }
-}
-
-unsafe fn submit_fallback_frame() {
-    const GREEN: u16 = 0x07E0;
-    let fb = vec![GREEN; (SCREEN_W * SCREEN_H) as usize];
-    if let Some(video) = VIDEO_CB {
-        video(fb.as_ptr() as *const c_void, SCREEN_W, SCREEN_H, (SCREEN_W * 2) as usize);
-    }
-}
+// → moved to video.rs
 
 unsafe fn submit_audio_frame() {
     let Some(ref mut blip) = BLIP_BUF else { return; };
