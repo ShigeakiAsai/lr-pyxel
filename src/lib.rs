@@ -152,12 +152,19 @@ fn pget(x: f32, y: f32) -> u8 {
 #[pyfunction]
 #[pyo3(signature = (x, y, img, u, v, w, h, colkey=None, rotate=None, scale=None))]
 #[allow(clippy::too_many_arguments)]
-fn blt(x: f32, y: f32, img: u32, u: f32, v: f32, w: f32, h: f32, colkey: Option<u8>, rotate: Option<f32>, scale: Option<f32>) {
+fn blt(x: f32, y: f32, img: pyo3::Bound<'_, pyo3::PyAny>, u: f32, v: f32, w: f32, h: f32, colkey: Option<u8>, rotate: Option<f32>, scale: Option<f32>) -> PyResult<()> {
     unsafe {
-        if PYXEL_READY {
-            pyxel_core::pyxel().draw_image(x, y, img, u, v, w, h, colkey, rotate, scale);
+        if !PYXEL_READY { return Ok(()); }
+        if let Ok(idx) = img.extract::<u32>() {
+            pyxel_core::pyxel().draw_image(x, y, idx, u, v, w, h, colkey, rotate, scale);
+        } else if let Ok(pyimg) = img.extract::<pyo3::PyRef<PyImage>>() {
+            let src = pyxel_core::images()[pyimg.bank].clone();
+            let screen = pyxel_core::screen();
+            let dst = &mut *screen.get();
+            dst.draw_image(x, y, &src, u, v, w, h, colkey, rotate, scale);
         }
     }
+    Ok(())
 }
 
 // bltm(x, y, tm, u, v, w, h, colkey=None, rotate=None, scale=None)
@@ -424,12 +431,10 @@ fn sound_set(
 // play(ch, snd, sec=None, loop=False, resume=False)
 // snd can be a single sound index (u32) or a list of sound indices (Vec<u32>)
 #[pyfunction]
-#[pyo3(signature = (ch, snd, sec=None, r#loop=None, resume=None, tick=None))]
-fn play(ch: u32, snd: pyo3::Bound<'_, pyo3::PyAny>, sec: Option<f32>, r#loop: Option<bool>, resume: Option<bool>, tick: Option<u32>) -> PyResult<()> {
+#[pyo3(signature = (ch, snd, sec=None, r#loop=None, resume=None))]
+fn play(ch: u32, snd: pyo3::Bound<'_, pyo3::PyAny>, sec: Option<f32>, r#loop: Option<bool>, resume: Option<bool>) -> PyResult<()> {
     unsafe {
         if !PYXEL_READY { return Ok(()); }
-        // tick is deprecated, convert to sec (120 ticks/sec)
-        let sec = sec.or_else(|| tick.map(|t| t as f32 / 120.0));
         let should_loop   = r#loop.unwrap_or(false);
         let should_resume = resume.unwrap_or(false);
         if let Ok(idx) = snd.extract::<u32>() {
@@ -2238,6 +2243,14 @@ pub unsafe extern "C" fn retro_get_system_av_info(info: *mut c_void) {
 
 #[no_mangle]
 pub unsafe extern "C" fn retro_init() {
+    // Always write stubs (even on re-init) so they're up to date
+    const MATH_PY:   &str = include_str!("../math.py");
+    const RANDOM_PY: &str = include_str!("../random.py");
+    let stub_dir = std::path::Path::new("/tmp/lr-pyxel-stdlib");
+    let _ = std::fs::create_dir_all(stub_dir);
+    let _ = std::fs::write(stub_dir.join("math.py"),   MATH_PY);
+    let _ = std::fs::write(stub_dir.join("random.py"), RANDOM_PY);
+
     // Guard: only initialize once. RetroArch may call retro_init() again
     // when switching content without fully unloading the core.
     if PYXEL_READY {
@@ -2274,26 +2287,6 @@ pub unsafe extern "C" fn retro_init() {
 
     // Start Python interpreter (after append_to_inittab)
     pyo3::prepare_freethreaded_python();
-
-    // Immediately after Python init: set up sys.path and remove cached .so modules
-    // so our stubs in /tmp/lr-pyxel-stdlib/ are loaded instead
-    Python::with_gil(|py| {
-        if let Ok(sys) = py.import_bound("sys") {
-            // Add stub dir to front of sys.path
-            if let Ok(path) = sys.getattr("path") {
-                if let Ok(syspath) = path.downcast_into::<pyo3::types::PyList>() {
-                    let _ = syspath.insert(0, "/tmp/lr-pyxel-stdlib");
-                }
-            }
-            // Remove math and random from sys.modules so our stubs are loaded
-            if let Ok(modules) = sys.getattr("modules") {
-                if let Ok(d) = modules.downcast_into::<pyo3::types::PyDict>() {
-                    let _ = d.del_item("math");
-                    let _ = d.del_item("random");
-                }
-            }
-        }
-    });
 }
 
 #[no_mangle]
@@ -2527,26 +2520,19 @@ pub unsafe extern "C" fn retro_load_game(game: *const c_void) -> bool {
         if let Ok(sys) = pyo3::Python::import_bound(py, "sys") {
             if let Ok(modules) = sys.getattr("modules") {
                 if let Ok(modules_dict) = modules.downcast_into::<pyo3::types::PyDict>() {
-                    // Explicitly remove math and random so our stubs in
-                    // /tmp/lr-pyxel-stdlib/ are loaded instead of the .so versions
-                    let _ = modules_dict.del_item("math");
-                    let _ = modules_dict.del_item("random");
-
-                    // Remove game-specific modules loaded from /tmp/lr-pyxel/
+                    // Keep only stdlib and built-in modules, remove game modules
                     let keys_to_remove: Vec<String> = modules_dict
-                        .items()
+                        .keys()
                         .iter()
-                        .filter_map(|item| {
-                            let key = item.get_item(0).ok()?.extract::<String>().ok()?;
-                            let val = item.get_item(1).ok()?;
-                            if let Ok(file) = val.getattr("__file__") {
-                                if let Ok(path) = file.extract::<String>() {
-                                    if path.contains("/tmp/lr-pyxel/") {
-                                        return Some(key);
-                                    }
-                                }
-                            }
-                            None
+                        .filter_map(|k| k.extract::<String>().ok())
+                        .filter(|k| {
+                            !k.starts_with('_')
+                                && !matches!(k.as_str(),
+                                    "sys" | "builtins" | "pyxel" | "os" | "os.path"
+                                    | "io" | "abc" | "types" | "typing" | "functools"
+                                    | "collections" | "itertools" | "operator"
+                                    | "re" | "enum" | "warnings" | "weakref"
+                                )
                         })
                         .collect();
                     for key in keys_to_remove {
@@ -2604,8 +2590,6 @@ pub unsafe extern "C" fn retro_load_game(game: *const c_void) -> bool {
         // Execute the game script
         let code    = std::fs::read_to_string(&script_path).unwrap_or_default();
         let globals = pyo3::types::PyDict::new_bound(py);
-        // Set __name__ = "__main__" so scripts using 'if __name__ == "__main__"' work
-        let _ = globals.set_item("__name__", "__main__");
 
         match py.run_bound(&code, Some(&globals), None) {
             Ok(_) => {
