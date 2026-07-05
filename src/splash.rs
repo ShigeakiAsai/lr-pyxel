@@ -1,89 +1,114 @@
 //! splash.rs — lr-pyxel splash screen
-//!
-//! Displays for SPLASH_FRAMES after content load:
-//!   - Isometric cube outline (background, dark gray)
-//!   - "libretro" text (small, left-aligned to "pyxel")
-//!   - "pyxel" in 4x pixel-art letters (white, centered)
-//!   - "Powered by Lakka" (bottom right)
-//!   - version number (bottom left)
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Draw the splash screen onto Pyxel's internal buffer.
 pub fn draw() {
     let px = pyxel_core::pyxel();
-
-    // Background
     px.clear(0);
 
-    let col: u8 = 5; // dark gray
+    let col: u8 = 5; // dark blue-gray
 
-    // --- Isometric cube outline (background) ---
-    let cx = 64.0f32;  // center x (128px screen / 2)
-    let ty = 15.0f32;  // top point y
-    let my = 33.0f32;  // middle y (top face bottom / left+right peak)
-    let by = 51.0f32;  // bottom of top face = center vertical
-    let lx = 22.0f32;  // left x
-    let rx = 106.0f32; // right x
-    let bly = 105.0f32; // bottom left y
-    let bry = 105.0f32; // bottom right y
-    let bcy = 123.0f32; // bottom center y
+    // --- Isometric cube outline (thick lines = draw twice offset by 1) ---
+    // 128x128 screen, cube centered at (64, 64)
+    let cx = 64.0f32;
+    let ty = 2.0f32;   // top point
+    let my = 26.0f32;  // middle (left/right peak of top face)
+    let by = 50.0f32;  // bottom of top face (center vertical start)
+    let lx = 12.0f32;  // left x
+    let rx = 116.0f32; // right x
+    let bly = 98.0f32;  // bottom left y
+    let bry = 98.0f32;  // bottom right y
+    let bcy = 122.0f32; // bottom center y
 
-    // Top face
-    px.draw_line(cx, ty, rx, my, col);
-    px.draw_line(rx, my, cx, by, col);
-    px.draw_line(cx, by, lx, my, col);
-    px.draw_line(lx, my, cx, ty, col);
+    // Top face (thick = 3 overlapping lines)
+    for d in 0..2u32 {
+        let d = d as f32;
+        px.draw_line(cx+d, ty+d, rx+d, my+d, col);
+        px.draw_line(rx+d, my+d, cx+d, by+d, col);
+        px.draw_line(cx+d, by+d, lx+d, my+d, col);
+        px.draw_line(lx+d, my+d, cx+d, ty+d, col);
+        // Left face
+        px.draw_line(lx+d, my+d, lx+d, bly+d, col);
+        px.draw_line(lx+d, bly+d, cx+d, bcy+d, col);
+        px.draw_line(cx+d, by+d, cx+d, bcy+d, col);
+        // Right face
+        px.draw_line(rx+d, my+d, rx+d, bry+d, col);
+        px.draw_line(rx+d, bry+d, cx+d, bcy+d, col);
+    }
 
-    // Left face
-    px.draw_line(lx, my, lx, bly, col);
-    px.draw_line(lx, bly, cx, bcy, col);
-    px.draw_line(cx, by, cx, bcy, col);
+    // --- "libretro" text with black outline ---
+    // Position: left-aligned to pyxel, above it
+    let lx2 = 14.0f32;
+    let ly2 = 52.0f32;
+    draw_text_outlined(px, lx2, ly2, "libretro", 13);
 
-    // Right face
-    px.draw_line(rx, my, rx, bry, col);
-    px.draw_line(rx, bry, cx, bcy, col);
+    // --- "pyxel" in 4x pixel-art letters, centered in cube ---
+    // Cube center x = 64, pyxel width = 5*12 + 4*2 = 68px → start x = 64-34 = 30
+    // Cube center y ≈ 58+34 = 92? Let's place at y=52 (between top and bottom)
+    let px_start_x = 30i32;
+    let px_start_y = 62i32;
+    draw_pyxel_text_outlined(px, px_start_x, px_start_y, 7);
 
-    // --- "libretro" text (left-aligned to pyxel, color 13 = gray) ---
-    px.draw_text(14.0, 42.0, "libretro", 13, None);
+    // --- Version bottom right ---
+    let ver_str = format!("v{}", VERSION);
+    let ver_x = 128.0 - (ver_str.len() as f32 * 4.0) - 2.0;
+    draw_text_outlined(px, ver_x, 119.0, &ver_str, 7);
+}
 
-    // --- "pyxel" in 4x pixel-art letters (white = color 7) ---
-    draw_pyxel_text(px, 14, 50, 7);
+/// Draw text with 1px black outline.
+fn draw_text_outlined(px: &pyxel_core::Pyxel, x: f32, y: f32, text: &str, col: u8) {
+    // Draw outline in black (4 directions)
+    for dx in [-1.0f32, 0.0, 1.0] {
+        for dy in [-1.0f32, 0.0, 1.0] {
+            if dx != 0.0 || dy != 0.0 {
+                px.draw_text(x + dx, y + dy, text, 0, None);
+            }
+        }
+    }
+    // Draw text on top
+    px.draw_text(x, y, text, col, None);
+}
 
-    // --- "Powered by Lakka" bottom right (color 5) ---
-    px.draw_text(50.0, 120.0, "Powered by Lakka", 5, None);
-
-    // --- Version bottom left (color 5) ---
-    px.draw_text(2.0, 120.0, VERSION, 5, None);
+/// Draw "pyxel" in 4x pixel font with black outline.
+fn draw_pyxel_text_outlined(px: &pyxel_core::Pyxel, start_x: i32, start_y: i32, col: u8) {
+    // Draw black outline first (offset by 1 in all 8 directions)
+    for dx in [-1i32, 0, 1] {
+        for dy in [-1i32, 0, 1] {
+            if dx != 0 || dy != 0 {
+                draw_pyxel_text(px, start_x + dx, start_y + dy, 0);
+            }
+        }
+    }
+    // Draw colored text on top
+    draw_pyxel_text(px, start_x, start_y, col);
 }
 
 /// Draw "pyxel" in 4x hand-crafted pixel font.
 fn draw_pyxel_text(px: &pyxel_core::Pyxel, start_x: i32, start_y: i32, col: u8) {
-    let s = 4i32;  // scale
-    let gap = 2i32; // gap between letters
+    let s = 4i32;
+    let gap = 2i32;
 
     let letters: &[&[u8]] = &[
-        // P: 111 101 111 100 100
-        &[0b111, 0b101, 0b111, 0b100, 0b100],
-        // Y: 101 101 011 001 110
-        &[0b101, 0b101, 0b011, 0b001, 0b110],
-        // X: 101 101 010 101 101
-        &[0b101, 0b101, 0b010, 0b101, 0b101],
-        // E: 111 100 110 100 111
-        &[0b111, 0b100, 0b110, 0b100, 0b111],
-        // L: 100 100 100 100 111
-        &[0b100, 0b100, 0b100, 0b100, 0b111],
+        &[0b111, 0b101, 0b111, 0b100, 0b100], // P
+        &[0b101, 0b101, 0b011, 0b001, 0b110], // Y
+        &[0b101, 0b101, 0b010, 0b101, 0b101], // X
+        &[0b111, 0b100, 0b110, 0b100, 0b111], // E
+        &[0b100, 0b100, 0b100, 0b100, 0b111], // L
     ];
 
     let mut lx = start_x;
     for rows in letters {
         for (ry, &row) in rows.iter().enumerate() {
             for cx in 0..3i32 {
-                let bit = (row >> (2 - cx)) & 1;
-                if bit == 1 {
-                    let rx = lx + cx * s;
-                    let ry2 = start_y + ry as i32 * s;
-                    px.draw_rect(rx as f32, ry2 as f32, (s-1) as f32, (s-1) as f32, col);
+                if (row >> (2 - cx)) & 1 == 1 {
+                    px.draw_rect(
+                        (lx + cx * s) as f32,
+                        (start_y + ry as i32 * s) as f32,
+                        (s - 1) as f32,
+                        (s - 1) as f32,
+                        col,
+                    );
                 }
             }
         }

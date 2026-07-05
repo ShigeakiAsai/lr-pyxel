@@ -478,6 +478,7 @@ pub unsafe extern "C" fn retro_unload_game() {
         PY_UPDATE = None;
         PY_DRAW   = None;
     });
+    SPLASH_COUNT = 0;
 }
 
 // ---------------------------------------------------------------------------
