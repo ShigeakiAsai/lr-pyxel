@@ -310,7 +310,24 @@ struct RetroGameInfo {
 #[allow(static_mut_refs)]
 pub unsafe extern "C" fn retro_load_game(game: *const c_void) -> bool {
     if game.is_null() {
-        return true; // content-less boot
+        // Content-less boot: launch the built-in file browser frontend
+        const FRONTEND_PY: &str = include_str!("../frontend.py");
+        Python::with_gil(|py| {
+            let globals = pyo3::types::PyDict::new_bound(py);
+            let _ = globals.set_item("__name__", "__main__");
+            match py.run_bound(FRONTEND_PY, Some(&globals), None) {
+                Ok(_) => {
+                    PY_UPDATE = globals.get_item("update").ok()
+                        .flatten()
+                        .map(|f| f.into());
+                    PY_DRAW = globals.get_item("draw").ok()
+                        .flatten()
+                        .map(|f| f.into());
+                }
+                Err(e) => { e.print(py); }
+            }
+        });
+        return true;
     }
     let info = &*(game as *const RetroGameInfo);
     if info.path.is_null() {
