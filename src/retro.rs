@@ -368,6 +368,7 @@ pub unsafe extern "C" fn retro_load_game(game: *const c_void) -> bool {
         RETRO_FRAME_COUNT = 0;
         LR_FRAME_COUNT    = 0;
         audio::PREV_BUTTONS = 0;
+        SPLASH_COUNT = 0;
 
         // Clear cached modules from previous game to prevent import conflicts.
         // Without this, modules like 'constants' from game A would be reused
@@ -546,8 +547,13 @@ pub unsafe extern "C" fn retro_run() {
             audio::submit_audio_frame();
         }
     } else {
-        // No game loaded — light blue placeholder
-        pyxel_core::pyxel().clear(11);
+        // No game loaded or splash period — show splash screen
+        if SPLASH_COUNT < SPLASH_FRAMES {
+            SPLASH_COUNT += 1;
+            splash::draw();
+        } else {
+            pyxel_core::pyxel().clear(0);
+        }
     }
 
     // 7. Submit framebuffer to RetroArch every frame to keep display smooth

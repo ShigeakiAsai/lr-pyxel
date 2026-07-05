@@ -5,6 +5,7 @@ mod video;
 mod audio;
 mod retro;
 mod wrappers;
+mod splash;
 
 // Re-export pyxel module fn so append_to_inittab!(pyxel) works in retro.rs
 pub use wrappers::pyxel;
@@ -95,3 +96,7 @@ static mut BLIP_BUF: Option<blip_buf::BlipBuf> = None;
 
 // Samples per frame at 22050 Hz / 60 fps (ceil)
 const AUDIO_SAMPLES_PER_FRAME: usize = 368;
+
+// Splash screen: show for this many frames after content load
+const SPLASH_FRAMES: u32 = 180; // 3 seconds @ 60fps
+static mut SPLASH_COUNT: u32 = 0;
