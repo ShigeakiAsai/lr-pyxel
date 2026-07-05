@@ -2,6 +2,7 @@
 // Copyright (c) 2026-present Yasai-san
 
 mod video;
+mod audio;
 
 use std::cmp::Ordering;
 use std::ffi::CStr;
@@ -2515,6 +2516,7 @@ pub unsafe extern "C" fn retro_load_game(game: *const c_void) -> bool {
         // Reset frame counters for new content
         RETRO_FRAME_COUNT = 0;
         LR_FRAME_COUNT    = 0;
+        audio::PREV_BUTTONS = 0;
 
         // Clear cached modules from previous game to prevent import conflicts.
         // Without this, modules like 'constants' from game A would be reused
@@ -2687,10 +2689,10 @@ pub unsafe extern "C" fn retro_run() {
             pyxel_core::pyxel().flip_screen();
 
             // 6. Inject input AFTER flip_screen()
-            inject_input(buttons);
+            audio::inject_input(buttons);
 
             // 8. Render and submit audio samples (only on game frames)
-            submit_audio_frame();
+            audio::submit_audio_frame();
         }
     } else {
         // No game loaded — light blue placeholder
@@ -2707,71 +2709,13 @@ pub unsafe extern "C" fn retro_run() {
 
 // → moved to video.rs
 
-// Previous frame's button bitmask — used to detect edges (press/release)
-static mut PREV_BUTTONS: u32 = 0;
-
-unsafe fn inject_input(buttons: u32) {
-    const MAP: &[(u32, u32)] = &[
-        // libretro bit → Pyxel key
-        // Bit 0 = B(cross),  1 = Y(square), 2 = Select, 3 = Start
-        // Bit 4 = Up, 5 = Down, 6 = Left, 7 = Right
-        // Bit 8 = A(circle), 9 = X(triangle), 10 = L, 11 = R
-        (0,  KEY_Z),
-        (1,  KEY_X),
-        (2,  KEY_S),         // Select → KEY_S
-        (3,  KEY_RETURN),
-        (4,  KEY_UP),
-        (5,  KEY_DOWN),
-        (6,  KEY_LEFT),
-        (7,  KEY_RIGHT),
-        (8,  KEY_A),
-        (9,  KEY_S),
-        // GAMEPAD1_BUTTON_* mapping
-        (0,  GAMEPAD1_BUTTON_B),
-        (1,  GAMEPAD1_BUTTON_A),
-        (2,  GAMEPAD1_BUTTON_BACK),
-        (3,  GAMEPAD1_BUTTON_START),
-        (4,  GAMEPAD1_BUTTON_DPAD_UP),
-        (5,  GAMEPAD1_BUTTON_DPAD_DOWN),
-        (6,  GAMEPAD1_BUTTON_DPAD_LEFT),
-        (7,  GAMEPAD1_BUTTON_DPAD_RIGHT),
-        (8,  GAMEPAD1_BUTTON_A),
-        (9,  GAMEPAD1_BUTTON_X),
-        (10, GAMEPAD1_BUTTON_LEFTSHOULDER),
-        (11, GAMEPAD1_BUTTON_RIGHTSHOULDER),
-    ];
-    let px = pyxel_core::pyxel();
-    let changed = buttons ^ PREV_BUTTONS;
-    for &(bit, key) in MAP {
-        let mask = 1u32 << bit;
-        if changed & mask != 0 {
-            px.set_button_state(key, buttons & mask != 0);
-        }
-    }
-    PREV_BUTTONS = buttons;
-}
+// → PREV_BUTTONS and inject_input moved to audio.rs
 
 // → moved to video.rs
 
 // → moved to video.rs
 
-unsafe fn submit_audio_frame() {
-    let Some(ref mut blip) = BLIP_BUF else { return; };
-    let Some(audio_cb)     = AUDIO_BATCH_CB else { return; };
-
-    // Render mono PCM from Pyxel's internal mixer
-    let mut mono = [0i16; AUDIO_SAMPLES_PER_FRAME];
-    pyxel_core::Audio::render_samples(pyxel_core::channels(), blip, &mut mono);
-
-    // Convert mono → stereo interleaved (L/R identical) as libretro expects
-    let mut stereo = [0i16; AUDIO_SAMPLES_PER_FRAME * 2];
-    for (i, &s) in mono.iter().enumerate() {
-        stereo[i * 2]     = s; // L
-        stereo[i * 2 + 1] = s; // R
-    }
-
-    audio_cb(stereo.as_ptr(), AUDIO_SAMPLES_PER_FRAME);
-}
+// → submit_audio_frame moved to audio.rs
 
 // ---------------------------------------------------------------------------
 // Required stubs
