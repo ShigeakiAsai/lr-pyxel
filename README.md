@@ -2,7 +2,27 @@
 
 A libretro core that runs [Pyxel](https://github.com/kitao/pyxel) games on RetroArch/Lakka.
 
-> **Status**: Work in progress — v0.5.x series complete, v0.6.x in development.
+> **Status**: Work in progress — v0.7.0 tagged, v0.8.0 in development.
+
+---
+
+## v0.7.0 Highlights
+
+- `pyxel.download_file()` / `pyxel.http_get()` — network access via the
+  system `curl` binary (Lakka's embedded Python has no `_socket.so` /
+  `_ssl.so`, so this replaces raw-socket/SSL Python code)
+- In-core game downloader (`downloader.pyxapp`) rewritten to use the above
+- Launcher (`frontend.py`) input carry-over fix when returning from
+  sub-apps like the downloader
+- Auto-repeat (hold/repeat, no acceleration) for D-pad/cursor navigation
+  in the launcher and downloader
+- Downloader "back to launcher" now responds to the physical B button
+  (SELECT is reserved core-wide for shutdown, not app navigation)
+- Build warning cleanup (`dead_code`, `static_mut_refs`)
+
+Planned for v0.8.0: audio submission fix (send 22050/GAME_FPS samples
+only on `should_update`, dropping the frame accumulator) and other
+follow-up items.
 
 ---
 

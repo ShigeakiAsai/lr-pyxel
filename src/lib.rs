@@ -94,8 +94,9 @@ static mut AUDIO_BATCH_CB: Option<unsafe extern "C" fn(*const i16, usize) -> usi
 // BlipBuf for Pyxel audio rendering (22050 Hz, NTSC clock)
 static mut BLIP_BUF: Option<blip_buf::BlipBuf> = None;
 
-// Samples per frame at 22050 Hz / 60 fps (ceil)
-const AUDIO_SAMPLES_PER_FRAME: usize = 368;
+// Note: fixed samples-per-frame constant removed — audio.rs now uses a
+// running accumulator (SAMPLE_ACCUMULATOR) to handle the 22050/60 = 367.5
+// non-integer sample rate instead of a single rounded constant.
 
 // Splash screen: show for this many frames after content load
 const SPLASH_FRAMES: u32 = 600; // 10 seconds @ 60fps

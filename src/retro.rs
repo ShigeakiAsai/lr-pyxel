@@ -100,10 +100,12 @@ pub unsafe extern "C" fn retro_init() {
     // Always write stubs (even on re-init) so they're up to date
     const MATH_PY:   &str = include_str!("../math.py");
     const RANDOM_PY: &str = include_str!("../random.py");
+    const STRUCT_PY: &str = include_str!("../struct.py");
     let stub_dir = std::path::Path::new("/tmp/lr-pyxel-stdlib");
     let _ = std::fs::create_dir_all(stub_dir);
     let _ = std::fs::write(stub_dir.join("math.py"),   MATH_PY);
     let _ = std::fs::write(stub_dir.join("random.py"), RANDOM_PY);
+    let _ = std::fs::write(stub_dir.join("struct.py"), STRUCT_PY);
 
     // Guard: only initialize once. RetroArch may call retro_init() again
     // when switching content without fully unloading the core.
@@ -141,6 +143,24 @@ pub unsafe extern "C" fn retro_init() {
 
     // Start Python interpreter (after append_to_inittab)
     pyo3::prepare_freethreaded_python();
+
+    // Remove problematic .so modules from sys.modules so our stubs are loaded
+    Python::with_gil(|py| {
+        if let Ok(sys) = py.import_bound("sys") {
+            if let Ok(path) = sys.getattr("path") {
+                if let Ok(syspath) = path.downcast_into::<pyo3::types::PyList>() {
+                    let _ = syspath.insert(0, "/tmp/lr-pyxel-stdlib");
+                }
+            }
+            if let Ok(modules) = sys.getattr("modules") {
+                if let Ok(d) = modules.downcast_into::<pyo3::types::PyDict>() {
+                    let _ = d.del_item("math");
+                    let _ = d.del_item("random");
+                    let _ = d.del_item("struct");
+                }
+            }
+        }
+    });
 }
 
 #[no_mangle]
@@ -425,7 +445,6 @@ pub unsafe extern "C" fn retro_load_game(game: *const c_void) -> bool {
         RETRO_FRAME_COUNT = 0;
         LR_FRAME_COUNT    = 0;
         audio::PREV_BUTTONS = 0;
-        SPLASH_COUNT = 0;
 
         // Clear cached modules from previous game to prevent import conflicts.
         // Without this, modules like 'constants' from game A would be reused
@@ -611,7 +630,12 @@ pub unsafe extern "C" fn retro_run() {
 
     // Check if frontend requested a content load
     if let Some(path) = PENDING_CONTENT.take() {
-        load_game_from_path(&path);
+        if path.is_empty() {
+            // load_content(None) → return to frontend
+            launch_frontend();
+        } else {
+            load_game_from_path(&path);
+        }
     }
 
     // Always submit audio every frame (accumulator handles 367/368 alternation)
@@ -625,7 +649,59 @@ pub unsafe extern "C" fn retro_run() {
 // Internal helpers
 // ---------------------------------------------------------------------------
 
+/// Launch the built-in frontend browser.
+#[allow(static_mut_refs)]
+unsafe fn launch_frontend() {
+    const FRONTEND_PY: &str = include_str!("../frontend.py");
+    PY_UPDATE = None;
+    PY_DRAW   = None;
+    GAME_W   = 128;
+    GAME_H   = 128;
+    GAME_FPS = 30;
+    RETRO_FRAME_COUNT = 0;
+    LR_FRAME_COUNT    = 0;
+    audio::PREV_BUTTONS = 0;
+    if PYXEL_READY {
+        pyxel_core::pyxel().stop_all_channels();
+    }
+    if let Some(ref mut blip) = BLIP_BUF {
+        *blip = blip_buf::BlipBuf::new(1024);
+        blip.set_rates(
+            pyxel_core::AUDIO_CLOCK_RATE as f64,
+            pyxel_core::AUDIO_SAMPLE_RATE as f64,
+        );
+    }
+    if let Some(env) = ENVIRON_CB {
+        let geometry = rust_libretro_sys::retro_game_geometry {
+            base_width:   128,
+            base_height:  128,
+            max_width:    256,
+            max_height:   256,
+            aspect_ratio: 1.0,
+        };
+        env(37, &geometry as *const _ as *mut c_void);
+    }
+    Python::with_gil(|py| {
+        let globals = pyo3::types::PyDict::new_bound(py);
+        let _ = globals.set_item("__name__", "__main__");
+        match py.run_bound(FRONTEND_PY, Some(&globals), None) {
+            Ok(_) => {
+                if PY_UPDATE.is_none() {
+                    PY_UPDATE = globals.get_item("update").ok()
+                        .flatten().map(|f| f.into());
+                }
+                if PY_DRAW.is_none() {
+                    PY_DRAW = globals.get_item("draw").ok()
+                        .flatten().map(|f| f.into());
+                }
+            }
+            Err(e) => { e.print(py); }
+        }
+    });
+}
+
 /// Load a game from a file path (called from frontend or PENDING_CONTENT).
+#[allow(static_mut_refs)]
 unsafe fn load_game_from_path(path: &str) {
     // Reset state
     PY_UPDATE = None;
@@ -633,7 +709,7 @@ unsafe fn load_game_from_path(path: &str) {
     RETRO_FRAME_COUNT = 0;
     LR_FRAME_COUNT    = 0;
     audio::PREV_BUTTONS = 0;
-    SPLASH_COUNT = 0;
+    // Note: SPLASH_COUNT is NOT reset here; splash only shows on core-less boot
 
     // Stop audio
     if PYXEL_READY {
@@ -687,6 +763,7 @@ unsafe fn load_game_from_path(path: &str) {
                 if let Ok(d) = modules.downcast_into::<pyo3::types::PyDict>() {
                     let _ = d.del_item("math");
                     let _ = d.del_item("random");
+                    let _ = d.del_item("struct");
                 }
             }
             // Update sys.path

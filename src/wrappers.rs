@@ -305,6 +305,56 @@ pub fn user_data_dir(vendor_name: &str, app_name: &str) -> PyResult<String> {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Network functions (shells out to the `curl` CLI binary)
+// ---------------------------------------------------------------------------
+// Lakka's embedded Python lacks _socket.so / _ssl.so, so networking can't
+// be done from Python (urllib etc.). These wrappers shell out to the
+// system `curl` binary instead of linking libcurl into the core, which
+// avoids cross-compiling libcurl/OpenSSL for the target device.
+//
+// Both release the GIL for the duration of the blocking curl call
+// (py.allow_threads). Without this, a game calling these from a background
+// Python thread (e.g. downloader.py) would still freeze the main
+// update()/draw() loop, since PyO3 holds the GIL across the FFI call
+// by default and only one Python thread can run at a time regardless.
+
+/// download_file(url, save_path) -> bool
+/// Downloads `url` to `save_path` via `curl -L -s -o save_path url`.
+/// Returns True on success (curl exit code 0), False otherwise.
+/// Does not raise on HTTP/network failure — check the return value.
+#[pyfunction]
+pub fn download_file(py: Python<'_>, url: &str, save_path: &str) -> PyResult<bool> {
+    let url = url.to_owned();
+    let save_path = save_path.to_owned();
+    let ok = py.allow_threads(move || {
+        std::process::Command::new("curl")
+            .args(["-L", "-s", "-o", &save_path, &url])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    });
+    Ok(ok)
+}
+
+/// http_get(url) -> str
+/// Fetches `url` via `curl -L -s url` and returns stdout decoded as UTF-8
+/// (lossy — invalid byte sequences are replaced, never raises on that).
+/// Raises OSError only if the `curl` process itself could not be spawned.
+#[pyfunction]
+pub fn http_get(py: Python<'_>, url: &str) -> PyResult<String> {
+    let url = url.to_owned();
+    let output = py.allow_threads(move || {
+        std::process::Command::new("curl")
+            .args(["-L", "-s", &url])
+            .output()
+    });
+    match output {
+        Ok(o) => Ok(String::from_utf8_lossy(&o.stdout).into_owned()),
+        Err(e) => Err(pyo3::exceptions::PyException::new_err(e.to_string())),
+    }
+}
+
 // -- sound -------------------------------------------------------------------
 
 // sound_set(no, notes, tones, volumes, effects, speed)
@@ -916,10 +966,12 @@ pub fn reset() {
 
 /// Load a content file from the frontend browser.
 /// Called by frontend.py when the user selects a file.
+/// Pass None or empty string to return to the frontend.
 #[pyfunction]
-pub fn load_content(path: &str) -> PyResult<()> {
+#[pyo3(signature = (path=None))]
+pub fn load_content(path: Option<&str>) -> PyResult<()> {
     unsafe {
-        crate::PENDING_CONTENT = Some(path.to_string());
+        crate::PENDING_CONTENT = Some(path.unwrap_or("").to_string());
     }
     Ok(())
 }
@@ -2001,6 +2053,9 @@ pub fn pyxel(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(screencast,       m)?)?;
     m.add_function(wrap_pyfunction!(reset_screencast, m)?)?;
     m.add_function(wrap_pyfunction!(user_data_dir,    m)?)?;
+    // Network
+    m.add_function(wrap_pyfunction!(download_file, m)?)?;
+    m.add_function(wrap_pyfunction!(http_get,      m)?)?;
     // Input
     m.add_function(wrap_pyfunction!(btn,         m)?)?;
     m.add_function(wrap_pyfunction!(btnp,        m)?)?;

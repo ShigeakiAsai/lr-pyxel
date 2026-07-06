@@ -16,28 +16,50 @@ def scan_files():
         pass
     return files
 
-files = scan_files()
+DOWNLOADER_ENTRY = "[Download new games]"
+DOWNLOADER_PATH  = "/storage/roms/pyxel/downloader.pyxapp"
+
+# Only show downloader entry if the .pyxapp exists
+_has_downloader = os.path.exists(DOWNLOADER_PATH)
+files = ([DOWNLOADER_ENTRY] if _has_downloader else []) + scan_files()
 cursor = 0
 MAX_VISIBLE = 12
 scroll = 0
 
+# Auto-repeat for UP/DOWN cursor movement: wait REPEAT_HOLD frames after
+# the initial press, then repeat every REPEAT_RATE frames at a constant
+# interval (no acceleration).
+REPEAT_HOLD = 20
+REPEAT_RATE = 4
+
 def update():
     global cursor, scroll
 
-    if pyxel.btnp(pyxel.KEY_UP) or pyxel.btnp(pyxel.GAMEPAD1_BUTTON_DPAD_UP):
+    # Ignore input for first 10 frames to avoid button carry-over from
+    # whatever content we just returned from (e.g. downloader.pyxapp
+    # calling pyxel.load_content(None) while A is still held/pressed).
+    if pyxel.frame_count < 10:
+        return
+
+    if pyxel.btnp(pyxel.KEY_UP, REPEAT_HOLD, REPEAT_RATE) or \
+       pyxel.btnp(pyxel.GAMEPAD1_BUTTON_DPAD_UP, REPEAT_HOLD, REPEAT_RATE):
         cursor = max(0, cursor - 1)
         if cursor < scroll:
             scroll = cursor
 
-    if pyxel.btnp(pyxel.KEY_DOWN) or pyxel.btnp(pyxel.GAMEPAD1_BUTTON_DPAD_DOWN):
+    if pyxel.btnp(pyxel.KEY_DOWN, REPEAT_HOLD, REPEAT_RATE) or \
+       pyxel.btnp(pyxel.GAMEPAD1_BUTTON_DPAD_DOWN, REPEAT_HOLD, REPEAT_RATE):
         cursor = min(len(files) - 1, cursor + 1)
         if cursor >= scroll + MAX_VISIBLE:
             scroll = cursor - MAX_VISIBLE + 1
 
     # Launch selected content
     if files and (pyxel.btnp(pyxel.KEY_RETURN) or pyxel.btnp(pyxel.GAMEPAD1_BUTTON_A)):
-        path = ROMS_DIR + "/" + files[cursor]
-        pyxel.load_content(path)
+        if files[cursor] == DOWNLOADER_ENTRY:
+            pyxel.load_content(DOWNLOADER_PATH)
+        else:
+            path = ROMS_DIR + "/" + files[cursor]
+            pyxel.load_content(path)
 
 def draw():
     pyxel.cls(0)
@@ -58,9 +80,15 @@ def draw():
         name = files[idx]
         if idx == cursor:
             pyxel.rect(0, y - 1, 128, 9, 1)
-            pyxel.text(4, y, name[:20], 7)
+            col = 10 if name == DOWNLOADER_ENTRY else 7
+            pyxel.text(4, y, name[:20], col)
         else:
-            col = 6 if name.endswith(".pyxapp") else 13
+            if name == DOWNLOADER_ENTRY:
+                col = 11
+            elif name.endswith(".pyxapp"):
+                col = 6
+            else:
+                col = 13
             pyxel.text(4, y, name[:20], col)
 
     # Scrollbar
