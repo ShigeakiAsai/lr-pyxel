@@ -34,6 +34,11 @@ def update():
         if cursor >= scroll + MAX_VISIBLE:
             scroll = cursor - MAX_VISIBLE + 1
 
+    # Launch selected content
+    if files and (pyxel.btnp(pyxel.KEY_RETURN) or pyxel.btnp(pyxel.GAMEPAD1_BUTTON_A)):
+        path = ROMS_DIR + "/" + files[cursor]
+        pyxel.load_content(path)
+
 def draw():
     pyxel.cls(0)
     pyxel.text(2, 2, "lr-pyxel", 5)

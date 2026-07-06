@@ -95,7 +95,11 @@ static mut AUDIO_BATCH_CB: Option<unsafe extern "C" fn(*const i16, usize) -> usi
 static mut BLIP_BUF: Option<blip_buf::BlipBuf> = None;
 
 // Samples per frame at 22050 Hz / 60 fps (ceil)
+const AUDIO_SAMPLES_PER_FRAME: usize = 368;
 
 // Splash screen: show for this many frames after content load
-const SPLASH_FRAMES: u32 = 180; // 3 seconds @ 60fps
+const SPLASH_FRAMES: u32 = 600; // 10 seconds @ 60fps
 static mut SPLASH_COUNT: u32 = 0;
+
+/// Content path requested by the frontend browser (set by pyxel.load_content())
+pub static mut PENDING_CONTENT: Option<String> = None;

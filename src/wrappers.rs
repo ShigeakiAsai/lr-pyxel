@@ -914,6 +914,16 @@ pub fn reset() {
     // For now this is a no-op; future: trigger RETRO_ENVIRONMENT_RESET
 }
 
+/// Load a content file from the frontend browser.
+/// Called by frontend.py when the user selects a file.
+#[pyfunction]
+pub fn load_content(path: &str) -> PyResult<()> {
+    unsafe {
+        crate::PENDING_CONTENT = Some(path.to_string());
+    }
+    Ok(())
+}
+
 #[pyfunction]
 pub fn title(_title: &str) {
     // no-op in headless mode
@@ -2027,6 +2037,7 @@ pub fn pyxel(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(noise,       m)?)?;
     // System (system_wrapper.rs)
     m.add_function(wrap_pyfunction!(quit,         m)?)?;
+    m.add_function(wrap_pyfunction!(load_content, m)?)?;
     m.add_function(wrap_pyfunction!(reset,        m)?)?;
     m.add_function(wrap_pyfunction!(show,         m)?)?;
     m.add_function(wrap_pyfunction!(flip,         m)?)?;

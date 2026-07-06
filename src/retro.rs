@@ -312,17 +312,47 @@ pub unsafe extern "C" fn retro_load_game(game: *const c_void) -> bool {
     if game.is_null() {
         // Content-less boot: launch the built-in file browser frontend
         const FRONTEND_PY: &str = include_str!("../frontend.py");
+        PY_UPDATE = None;
+        PY_DRAW   = None;
+        SPLASH_COUNT = 0;
+        // Reset game dimensions to default for frontend
+        GAME_W   = 128;
+        GAME_H   = 128;
+        GAME_FPS = 30;
+        RETRO_FRAME_COUNT = 0;
+        LR_FRAME_COUNT    = 0;
+        audio::PREV_BUTTONS = 0;
+        // Stop audio from previous content
+        if PYXEL_READY {
+            pyxel_core::pyxel().stop_all_channels();
+        }
+        if let Some(ref mut blip) = BLIP_BUF {
+            *blip = blip_buf::BlipBuf::new(1024);
+            blip.set_rates(
+                pyxel_core::AUDIO_CLOCK_RATE as f64,
+                pyxel_core::AUDIO_SAMPLE_RATE as f64,
+            );
+        }
+        // Reset geometry
+        if let Some(env) = ENVIRON_CB {
+            let geometry = rust_libretro_sys::retro_game_geometry {
+                base_width:   128,
+                base_height:  128,
+                max_width:    256,
+                max_height:   256,
+                aspect_ratio: 1.0,
+            };
+            env(37, &geometry as *const _ as *mut c_void);
+        }
         Python::with_gil(|py| {
             let globals = pyo3::types::PyDict::new_bound(py);
             let _ = globals.set_item("__name__", "__main__");
             match py.run_bound(FRONTEND_PY, Some(&globals), None) {
                 Ok(_) => {
                     PY_UPDATE = globals.get_item("update").ok()
-                        .flatten()
-                        .map(|f| f.into());
+                        .flatten().map(|f| f.into());
                     PY_DRAW = globals.get_item("draw").ok()
-                        .flatten()
-                        .map(|f| f.into());
+                        .flatten().map(|f| f.into());
                 }
                 Err(e) => { e.print(py); }
             }
@@ -579,6 +609,11 @@ pub unsafe extern "C" fn retro_run() {
     // Always inject input every frame
     audio::inject_input(buttons);
 
+    // Check if frontend requested a content load
+    if let Some(path) = PENDING_CONTENT.take() {
+        load_game_from_path(&path);
+    }
+
     // Always submit audio every frame (accumulator handles 367/368 alternation)
     audio::submit_audio_frame();
 
@@ -590,7 +625,110 @@ pub unsafe extern "C" fn retro_run() {
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-// → moved to video.rs
+/// Load a game from a file path (called from frontend or PENDING_CONTENT).
+unsafe fn load_game_from_path(path: &str) {
+    // Reset state
+    PY_UPDATE = None;
+    PY_DRAW   = None;
+    RETRO_FRAME_COUNT = 0;
+    LR_FRAME_COUNT    = 0;
+    audio::PREV_BUTTONS = 0;
+    SPLASH_COUNT = 0;
+
+    // Stop audio
+    if PYXEL_READY {
+        pyxel_core::pyxel().stop_all_channels();
+    }
+    if let Some(ref mut blip) = BLIP_BUF {
+        *blip = blip_buf::BlipBuf::new(1024);
+        blip.set_rates(
+            pyxel_core::AUDIO_CLOCK_RATE as f64,
+            pyxel_core::AUDIO_SAMPLE_RATE as f64,
+        );
+    }
+
+    // Resolve script path
+    let script_path = if path.ends_with(".pyxapp") {
+        match extract_pyxapp(path) {
+            Some(p) => p,
+            None => return,
+        }
+    } else {
+        path.to_string()
+    };
+
+    // Static analysis
+    if let Ok(code) = std::fs::read_to_string(&script_path) {
+        if let Some((w, h, fps)) = parse_pyxel_init(&code) {
+            eprintln!("[lr-pyxel] frontend launch: w={w} h={h} fps={fps}");
+            GAME_W   = w;
+            GAME_H   = h;
+            GAME_FPS = fps;
+        }
+    }
+
+    // Notify RetroArch of geometry
+    if let Some(env) = ENVIRON_CB {
+        let geometry = rust_libretro_sys::retro_game_geometry {
+            base_width:   GAME_W,
+            base_height:  GAME_H,
+            max_width:    256,
+            max_height:   256,
+            aspect_ratio: GAME_W as f32 / GAME_H as f32,
+        };
+        env(37, &geometry as *const _ as *mut c_void);
+    }
+
+    // Execute the script
+    Python::with_gil(|py| {
+        // Clear sys.modules of previous game
+        if let Ok(sys) = py.import_bound("sys") {
+            if let Ok(modules) = sys.getattr("modules") {
+                if let Ok(d) = modules.downcast_into::<pyo3::types::PyDict>() {
+                    let _ = d.del_item("math");
+                    let _ = d.del_item("random");
+                }
+            }
+            // Update sys.path
+            if let Ok(path_attr) = sys.getattr("path") {
+                if let Ok(syspath) = path_attr.downcast_into::<pyo3::types::PyList>() {
+                    let game_dir = std::path::Path::new(&script_path)
+                        .parent()
+                        .unwrap_or(std::path::Path::new("."))
+                        .to_string_lossy()
+                        .into_owned();
+                    let _ = syspath.insert(0, game_dir.clone());
+                    let _ = std::env::set_current_dir(&game_dir);
+                }
+            }
+        }
+        if let Ok(code) = std::fs::read_to_string(&script_path) {
+            let globals = pyo3::types::PyDict::new_bound(py);
+            let _ = globals.set_item("__name__", "__main__");
+            match py.run_bound(&code, Some(&globals), None) {
+                Ok(_) => {
+                    // pyxel.run() may have already set PY_UPDATE/PY_DRAW.
+                    // Only fall back to globals if not set.
+                    if PY_UPDATE.is_none() {
+                        PY_UPDATE = globals.get_item("update").ok()
+                            .flatten().map(|f| f.into());
+                    }
+                    if PY_DRAW.is_none() {
+                        PY_DRAW = globals.get_item("draw").ok()
+                            .flatten().map(|f| f.into());
+                    }
+                    // If still not set, use noop
+                    if PY_UPDATE.is_none() {
+                        let noop = py.eval_bound("lambda: None", None, None).unwrap();
+                        PY_UPDATE = Some(noop.clone().into());
+                        PY_DRAW   = Some(noop.into());
+                    }
+                }
+                Err(e) => { e.print(py); }
+            }
+        }
+    });
+}
 
 // → PREV_BUTTONS and inject_input moved to audio.rs
 
