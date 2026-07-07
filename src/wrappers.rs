@@ -691,6 +691,13 @@ pub fn add_module_constants(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("KEY_RCTRL",       pyxel_core::KEY_RCTRL)?;
     m.add("KEY_RSHIFT",      pyxel_core::KEY_RSHIFT)?;
     m.add("KEY_RALT",        pyxel_core::KEY_RALT)?;
+    m.add("KEY_LGUI",        pyxel_core::KEY_LGUI)?;
+    m.add("KEY_RGUI",        pyxel_core::KEY_RGUI)?;
+    m.add("KEY_SHIFT",       pyxel_core::KEY_SHIFT)?;
+    m.add("KEY_CTRL",        pyxel_core::KEY_CTRL)?;
+    m.add("KEY_ALT",         pyxel_core::KEY_ALT)?;
+    m.add("KEY_GUI",         pyxel_core::KEY_GUI)?;
+    m.add("KEY_NONE",        pyxel_core::KEY_NONE)?;
     // Mouse
     m.add("MOUSE_POS_X",          pyxel_core::MOUSE_POS_X)?;
     m.add("MOUSE_POS_Y",          pyxel_core::MOUSE_POS_Y)?;
@@ -902,7 +909,15 @@ pub fn btnv(key: u32) -> i32 {
 }
 #[pyfunction]
 pub fn mouse(visible: bool) {
-    unsafe { if PYXEL_READY { pyxel_core::pyxel().set_mouse_visible(visible); } }
+    // Real mouse input isn't implemented yet (retro_run() only polls
+    // RETRO_DEVICE_JOYPAD, never RETRO_DEVICE_MOUSE), so mouse_x/mouse_y
+    // never move from their initial value. pyxel_core's own flip_screen()
+    // still draws the cursor sprite at (mouse_x, mouse_y) whenever
+    // visibility is on, which would show a static, non-functional cursor
+    // stuck in place. Force it hidden regardless of what the script
+    // requests until mouse input is actually wired up.
+    let _ = visible;
+    unsafe { if PYXEL_READY { pyxel_core::pyxel().set_mouse_visible(false); } }
 }
 
 #[pyfunction]
