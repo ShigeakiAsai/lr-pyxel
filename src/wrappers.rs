@@ -965,9 +965,25 @@ pub fn show() {
 }
 
 // flip() — advances one frame manually (used instead of pyxel.run()).
-// In libretro context this is a no-op: framing is driven by retro_run().
+// Unsupported in libretro (framing is driven by retro_run()); raises
+// instead of no-op'ing so flip()-based main loops fail fast (see below).
 #[pyfunction]
-pub fn flip() {}
+pub fn flip() -> PyResult<()> {
+    // Previously a silent no-op. Scripts using the flip()-based main loop
+    // pattern (`while True: ... pyxel.flip()`, e.g. 99_flip_animation.py)
+    // never call back into Rust between flip() calls, so with flip() doing
+    // nothing the loop never terminates — it spins forever inside the
+    // single py.run_bound() call that runs the script, permanently
+    // hanging retro_run() (RetroArch itself freezes, no crash, no error).
+    // Raising here instead lets the loop's first flip() call unwind back
+    // out with a clear, actionable message instead of a silent hang.
+    Err(pyo3::exceptions::PyRuntimeError::new_err(
+        "pyxel.flip() is not supported in lr-pyxel (libretro build). \
+         Games driven by a `while True: ... pyxel.flip()` main loop can't \
+         run under libretro's frame-driven retro_run() model — only \
+         pyxel.run(update, draw) is supported here."
+    ))
+}
 
 // system_wrapper.rs additions
 // Window/display settings are no-ops in headless libretro mode

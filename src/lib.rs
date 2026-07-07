@@ -99,7 +99,7 @@ static mut BLIP_BUF: Option<blip_buf::BlipBuf> = None;
 // non-integer sample rate instead of a single rounded constant.
 
 // Splash screen: show for this many frames after content load
-const SPLASH_FRAMES: u32 = 120; // 2 seconds @ 60fps
+const SPLASH_FRAMES: u32 = 180; // 3 seconds @ 60fps
 static mut SPLASH_COUNT: u32 = 0;
 
 /// Content path requested by the frontend browser (set by pyxel.load_content())

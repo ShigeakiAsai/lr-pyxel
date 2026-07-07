@@ -248,6 +248,25 @@ unsafe fn reset_color_palette() {
     }
 }
 
+// Show a short on-screen notification via RetroArch's own OSD message
+// system (RETRO_ENVIRONMENT_SET_MESSAGE = 12), instead of building a
+// custom in-Pyxel error screen. Used when a script fails to load (e.g.
+// unsupported patterns like flip()-based main loops or `import pyxel.cli`)
+// so the person actually sees *something* on screen, rather than the
+// core silently bouncing back to the launcher with only a stderr
+// traceback (invisible on a TV with no attached console).
+unsafe fn show_retroarch_message(text: &str, frames: u32) {
+    if let Some(env) = ENVIRON_CB {
+        if let Ok(cmsg) = std::ffi::CString::new(text) {
+            let message = rust_libretro_sys::retro_message {
+                msg: cmsg.as_ptr(),
+                frames,
+            };
+            env(6, &message as *const _ as *mut c_void); // RETRO_ENVIRONMENT_SET_MESSAGE
+        }
+    }
+}
+
 fn parse_pyxel_init(script: &str) -> Option<(u32, u32, u32)> {
     // Build variable map from simple assignments (VAR = NUMBER)
     let mut var_map: std::collections::HashMap<&str, u32> = std::collections::HashMap::new();
@@ -600,6 +619,10 @@ pub unsafe extern "C" fn retro_load_game(game: *const c_void) -> bool {
             }
             Err(e) => {
                 e.print(py);
+                show_retroarch_message(
+                    "This app is not compatible with lr-pyxel (see log for details)",
+                    240,
+                );
             }
         }
     });
@@ -887,7 +910,13 @@ unsafe fn load_game_from_path(path: &str) {
                         PY_DRAW   = Some(noop.into());
                     }
                 }
-                Err(e) => { e.print(py); }
+                Err(e) => {
+                    e.print(py);
+                    show_retroarch_message(
+                        "This app is not compatible with lr-pyxel (see log for details)",
+                        240,
+                    );
+                }
             }
         }
     });
