@@ -60,8 +60,8 @@ static mut INPUT_STATE: Option<unsafe extern "C" fn(c_uint, c_uint, c_uint, c_ui
 static mut ENVIRON_CB:  Option<unsafe extern "C" fn(c_uint, *mut c_void) -> bool>             = None;
 
 // Screen dimensions
-const SCREEN_W: u32 = 256;
-const SCREEN_H: u32 = 256;
+const SCREEN_W: u32 = 512;
+const SCREEN_H: u32 = 512;
 const FPS: u32      = 60;
 
 // Game-requested FPS (set by pyxel.init(), default 30)
@@ -99,7 +99,7 @@ static mut BLIP_BUF: Option<blip_buf::BlipBuf> = None;
 // non-integer sample rate instead of a single rounded constant.
 
 // Splash screen: show for this many frames after content load
-const SPLASH_FRAMES: u32 = 600; // 10 seconds @ 60fps
+const SPLASH_FRAMES: u32 = 120; // 2 seconds @ 60fps
 static mut SPLASH_COUNT: u32 = 0;
 
 /// Content path requested by the frontend browser (set by pyxel.load_content())

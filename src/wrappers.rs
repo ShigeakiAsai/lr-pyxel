@@ -71,7 +71,7 @@ pub fn blt(x: f32, y: f32, img: pyo3::Bound<'_, pyo3::PyAny>, u: f32, v: f32, w:
         if let Ok(idx) = img.extract::<u32>() {
             pyxel_core::pyxel().draw_image(x, y, idx, u, v, w, h, colkey, rotate, scale);
         } else if let Ok(pyimg) = img.extract::<pyo3::PyRef<PyImage>>() {
-            let src = pyxel_core::images()[pyimg.bank].clone();
+            let src = pyimg.rc().clone();
             let screen = pyxel_core::screen();
             let dst = &mut *screen.get();
             dst.draw_image(x, y, &src, u, v, w, h, colkey, rotate, scale);
@@ -137,7 +137,7 @@ pub fn image(img: u32) -> PyResult<PyImage> {
     if img as usize >= pyxel_core::NUM_IMAGES as usize {
         return Err(pyo3::exceptions::PyValueError::new_err("Invalid image index"));
     }
-    Ok(PyImage { bank: img as usize })
+    Ok(PyImage { image: pyxel_core::images()[img as usize].clone() })
 }
 
 // Deprecated: pyxel.tilemap(n) → use pyxel.tilemaps[n] instead
@@ -147,7 +147,7 @@ pub fn tilemap_fn(tm: u32) -> PyResult<PyTilemap> {
     if tm as usize >= pyxel_core::NUM_TILEMAPS as usize {
         return Err(pyo3::exceptions::PyValueError::new_err("Invalid tilemap index"));
     }
-    Ok(PyTilemap { bank: tm as usize })
+    Ok(PyTilemap { tilemap: pyxel_core::tilemaps()[tm as usize].clone() })
 }
 
 // image_load(bank, path, x=0, y=0, include_colors=False)
@@ -434,6 +434,20 @@ pub fn stop(ch: Option<u32>) {
             Some(c) => pyxel_core::pyxel().stop_channel(c),
             None    => pyxel_core::pyxel().stop_all_channels(),
         }
+    }
+}
+
+// gen_bgm(preset, transp, instr, seed, play=None)
+// Procedurally generates a 4-channel BGM (one MML string per channel) from
+// (preset, transpose, instrumentation, seed). If play is true, immediately
+// assigns and plays the generated MML on channels 0-3 (looping); either
+// way, the generated MML strings are returned.
+#[pyfunction]
+#[pyo3(signature = (preset, transp, instr, seed, play=None))]
+pub fn gen_bgm(preset: i32, transp: i32, instr: i32, seed: u64, play: Option<bool>) -> PyResult<Vec<String>> {
+    unsafe {
+        if !PYXEL_READY { return Ok(Vec::new()); }
+        Ok(pyxel_core::pyxel().gen_bgm(preset, transp, instr, seed, play))
     }
 }
 
@@ -1042,14 +1056,14 @@ pub fn resize(width: u32, height: u32) -> PyResult<()> {
 // Image wrapper (image_wrapper.rs)
 // ---------------------------------------------------------------------------
 
-#[pyclass(name = "Image")]
+#[pyclass(name = "Image", unsendable)]
 pub struct PyImage {
-    bank: usize,
+    image: pyxel_core::RcImage,
 }
 
 impl PyImage {
     pub fn rc(&self) -> &pyxel_core::RcImage {
-        &pyxel_core::images()[self.bank]
+        &self.image
     }
 }
 
@@ -1057,25 +1071,31 @@ impl PyImage {
 impl PyImage {
     #[new]
     pub fn new(width: u32, height: u32) -> Self {
-        let _ = (width, height);
-        PyImage { bank: 0 }
+        // Previously this ignored width/height and always aliased the
+        // fixed bank-0 image, so every pyxel.Image(w, h) instance shared
+        // the same underlying canvas (see problem: dynamic Image creation
+        // not supported, e.g. 11_offscreen.py). pyxel_core::Image::new()
+        // allocates a genuinely independent image, not tied to any of the
+        // fixed NUM_IMAGES banks.
+        PyImage { image: pyxel_core::Image::new(width, height) }
     }
 
     #[staticmethod]
     #[pyo3(signature = (filename, include_colors=None))]
     pub fn from_image(filename: &str, include_colors: Option<bool>) -> PyResult<Self> {
-        // Load image into bank 0 as a temporary holder
-        // Full implementation would require dynamic storage
+        // pyxel_core::Image::load() does NOT resize its target canvas — it
+        // just blits the loaded file into the existing (fixed-size) canvas,
+        // clipped to its bounds. pyxel_core::Image::from_image() is the
+        // correct function here: it creates a brand new image already
+        // sized to match the loaded file.
         unsafe {
-            if PYXEL_READY {
-                let imgs = pyxel_core::images();
-                let rc = &imgs[0];
-                let img = &mut *rc.get();
-                img.load(0, 0, filename, include_colors)
-                    .map_err(pyo3::exceptions::PyException::new_err)?;
+            if !PYXEL_READY {
+                return Err(pyo3::exceptions::PyRuntimeError::new_err("Pyxel not initialized"));
             }
         }
-        Ok(PyImage { bank: 0 })
+        let image = pyxel_core::Image::from_image(filename, include_colors)
+            .map_err(pyo3::exceptions::PyException::new_err)?;
+        Ok(PyImage { image })
     }
 
     #[getter]
@@ -1210,12 +1230,20 @@ impl PyImage {
 
     #[pyo3(signature = (x, y, img, u, v, w, h, colkey=None, rotate=None, scale=None))]
     #[allow(clippy::too_many_arguments)]
-    pub fn blt(&self, x: f32, y: f32, img: u32, u: f32, v: f32, w: f32, h: f32,
+    pub fn blt(&self, x: f32, y: f32, img: pyo3::Bound<'_, pyo3::PyAny>, u: f32, v: f32, w: f32, h: f32,
            colkey: Option<u8>, rotate: Option<f32>, scale: Option<f32>) -> PyResult<()> {
         unsafe {
-            let src = pyxel_core::images().get(img as usize)
-                .cloned()
-                .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("Invalid image index"))?;
+            let src = if let Ok(idx) = img.extract::<u32>() {
+                pyxel_core::images().get(idx as usize)
+                    .cloned()
+                    .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("Invalid image index"))?
+            } else if let Ok(pyimg) = img.extract::<pyo3::PyRef<PyImage>>() {
+                pyimg.rc().clone()
+            } else {
+                return Err(pyo3::exceptions::PyTypeError::new_err(
+                    "img must be an image bank index (int) or an Image instance"
+                ));
+            };
             let dst = &mut *self.rc().get();
             dst.draw_image(x, y, &src, u, v, w, h, colkey, rotate, scale);
         }
@@ -1253,7 +1281,7 @@ impl PyImageList {
                 format!("image bank index {idx} out of range")
             ));
         }
-        Ok(PyImage { bank: idx })
+        Ok(PyImage { image: pyxel_core::images()[idx].clone() })
     }
 
     pub fn __setitem__(&self, idx: usize, val: pyo3::PyRef<PyImage>) -> PyResult<()> {
@@ -1262,21 +1290,13 @@ impl PyImageList {
                 format!("image bank index {idx} out of range")
             ));
         }
-        // Copy pixel data from val.bank to idx bank
-        unsafe {
-            let src_rc = pyxel_core::images()[val.bank].clone();
-            let dst_rc = &pyxel_core::images()[idx];
-            let src = &*src_rc.get();
-            let dst = &mut *dst_rc.get();
-            let w = src.width() as usize;
-            let h = src.height() as usize;
-            for y in 0..h {
-                for x in 0..w {
-                    let col = src.pixel(x as f32, y as f32);
-                    dst.set_pixel(x as f32, y as f32, col);
-                }
-            }
-        }
+        // Replace the bank's underlying image outright (Rc clone: shares
+        // the same canvas as `val`), rather than copying pixels into the
+        // existing fixed-size bank canvas. The old pixel-copy approach
+        // silently clipped anything wider/taller than the bank's current
+        // size (e.g. loading a >256px-wide tileset PNG into image bank 0
+        // would truncate everything past x=256/y=256).
+        pyxel_core::images()[idx] = val.rc().clone();
         Ok(())
     }
 }
@@ -1438,14 +1458,14 @@ impl PySoundList {
 // Tilemap wrapper (tilemap_wrapper.rs)
 // ---------------------------------------------------------------------------
 
-#[pyclass(name = "Tilemap")]
+#[pyclass(name = "Tilemap", unsendable)]
 pub struct PyTilemap {
-    bank: usize,
+    tilemap: pyxel_core::RcTilemap,
 }
 
 impl PyTilemap {
     pub fn rc(&self) -> &pyxel_core::RcTilemap {
-        &pyxel_core::tilemaps()[self.bank]
+        &self.tilemap
     }
 }
 
@@ -1453,17 +1473,19 @@ impl PyTilemap {
 impl PyTilemap {
     #[staticmethod]
     pub fn from_tmx(filename: &str, layer: u32) -> PyResult<Self> {
-        // Load TMX into bank 0 as a temporary holder
+        // Same fix as Image::from_image: Tilemap::load() does NOT resize
+        // its target canvas, it only blits into the existing (fixed-size)
+        // one. pyxel_core::Tilemap::from_tmx() is the correct function
+        // here — it creates a brand new tilemap already sized to match
+        // the loaded TMX layer.
         unsafe {
-            if PYXEL_READY {
-                let tms = pyxel_core::tilemaps();
-                let rc = &tms[0];
-                let tm = &mut *rc.get();
-                tm.load(0, 0, filename, layer)
-                    .map_err(pyo3::exceptions::PyException::new_err)?;
+            if !PYXEL_READY {
+                return Err(pyo3::exceptions::PyRuntimeError::new_err("Pyxel not initialized"));
             }
         }
-        Ok(PyTilemap { bank: 0 })
+        let tilemap = pyxel_core::Tilemap::from_tmx(filename, layer)
+            .map_err(pyo3::exceptions::PyException::new_err)?;
+        Ok(PyTilemap { tilemap })
     }
 
     #[getter]
@@ -1624,7 +1646,7 @@ impl PyTilemapList {
                 format!("tilemap bank index {idx} out of range")
             ));
         }
-        Ok(PyTilemap { bank: idx })
+        Ok(PyTilemap { tilemap: pyxel_core::tilemaps()[idx].clone() })
     }
 
     pub fn __setitem__(&self, idx: usize, val: pyo3::PyRef<PyTilemap>) -> PyResult<()> {
@@ -1633,21 +1655,10 @@ impl PyTilemapList {
                 format!("tilemap bank index {idx} out of range")
             ));
         }
-        unsafe {
-            let src_rc = pyxel_core::tilemaps()[val.bank].clone();
-            let dst_rc = &pyxel_core::tilemaps()[idx];
-            let src = &*src_rc.get();
-            let dst = &mut *dst_rc.get();
-            let w = src.width() as usize;
-            let h = src.height() as usize;
-            for y in 0..h {
-                for x in 0..w {
-                    let tile = src.tile(x as f32, y as f32);
-                    dst.set_tile(x as f32, y as f32, tile);
-                }
-            }
-            dst.imgsrc = src.imgsrc.clone();
-        }
+        // Same fix as ImageList::__setitem__: replace the bank outright
+        // instead of copying tiles into the existing fixed-size canvas,
+        // which silently truncated maps larger than the current bank size.
+        pyxel_core::tilemaps()[idx] = val.rc().clone();
         Ok(())
     }
 }
@@ -2070,6 +2081,7 @@ pub fn pyxel(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Audio
     m.add_function(wrap_pyfunction!(sound_set,   m)?)?;
     m.add_function(wrap_pyfunction!(play,        m)?)?;
+    m.add_function(wrap_pyfunction!(gen_bgm,     m)?)?;
     m.add_function(wrap_pyfunction!(playm,       m)?)?;
     m.add_function(wrap_pyfunction!(stop,        m)?)?;
     m.add_function(wrap_pyfunction!(play_pos,    m)?)?;

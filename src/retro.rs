@@ -84,8 +84,8 @@ pub unsafe extern "C" fn retro_get_system_av_info(info: *mut c_void) {
     let h = if GAME_H > 0 { GAME_H } else { SCREEN_H };
     (*info).geometry.base_width   = w;
     (*info).geometry.base_height  = h;
-    (*info).geometry.max_width    = 256;
-    (*info).geometry.max_height   = 256;
+    (*info).geometry.max_width    = 512;
+    (*info).geometry.max_height   = 512;
     (*info).geometry.aspect_ratio = w as f32 / h as f32;
     (*info).timing.fps            = f64::from(FPS);
     (*info).timing.sample_rate    = 22050.0;
@@ -187,6 +187,67 @@ pub unsafe extern "C" fn retro_deinit() {
 
 // Parse pyxel.init(w, h, ..., fps=N, ...) from a Python script.
 // Returns (width, height, fps) if found, None otherwise.
+// Splits a comma-separated argument list at top-level commas only,
+// respecting nested parens/brackets/braces and quoted strings (so a
+// keyword arg like `title="a, b"` or `pos=(1, 2)` isn't split apart).
+// This lets pyxel.init(...) calls be parsed whether written all on one
+// line or spread across several — the previous implementation assumed
+// "one argument per line", which silently failed for the very common
+// single-line style `pyxel.init(464, 256, title="...")` (the comma
+// splitting was never done, so the whole call was treated as one
+// argument and `w`/`h` were never found).
+fn split_top_level_args(s: &str) -> Vec<&str> {
+    let mut args = Vec::new();
+    let mut depth = 0i32;
+    let mut in_str: Option<char> = None;
+    let mut prev_was_backslash = false;
+    let mut start = 0usize;
+
+    for (idx, c) in s.char_indices() {
+        if let Some(qc) = in_str {
+            if c == qc && !prev_was_backslash {
+                in_str = None;
+            }
+            prev_was_backslash = c == '\\' && !prev_was_backslash;
+            continue;
+        }
+        prev_was_backslash = false;
+        match c {
+            '\'' | '"' => in_str = Some(c),
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' => depth -= 1,
+            ',' if depth == 0 => {
+                args.push(s[start..idx].trim());
+                start = idx + c.len_utf8();
+            }
+            _ => {}
+        }
+    }
+    let last = s[start..].trim();
+    if !last.is_empty() {
+        args.push(last);
+    }
+    args
+}
+
+// Default 16-color Pyxel palette (mirrors pyxel_core::settings::DEFAULT_COLORS).
+// pyxel_core::colors() is a single process-wide list — pyxel_core::init()
+// can only run once per process, so lr-pyxel never re-initializes it on
+// content switches, it only resets its own state (GAME_W/H, frame counts,
+// etc). Image.from_image(..., include_colors=True) permanently overwrites
+// this shared palette, so without an explicit reset here, a game's custom
+// palette leaks into whatever loads next (the launcher or another game).
+const DEFAULT_PYXEL_COLORS: [u32; 16] = [
+    0x0000_00, 0x2b33_5f, 0x7e20_72, 0x1995_9c, 0x8b48_52, 0x395c_98, 0xa9c1_ff, 0xeeee_ee,
+    0xd418_6c, 0xd384_41, 0xe9c3_5b, 0x70c6_a9, 0x7696_de, 0xa3a3_a3, 0xff97_98, 0xedc7_b0,
+];
+
+unsafe fn reset_color_palette() {
+    if PYXEL_READY {
+        *pyxel_core::colors() = DEFAULT_PYXEL_COLORS.to_vec();
+    }
+}
+
 fn parse_pyxel_init(script: &str) -> Option<(u32, u32, u32)> {
     // Build variable map from simple assignments (VAR = NUMBER)
     let mut var_map: std::collections::HashMap<&str, u32> = std::collections::HashMap::new();
@@ -224,19 +285,18 @@ fn parse_pyxel_init(script: &str) -> Option<(u32, u32, u32)> {
         s.parse::<u32>().ok().or_else(|| var_map.get(s).copied())
     };
 
-    // Extract each argument line by line
+    // Extract each argument, whether the call spans one line or several
     let mut w: Option<u32> = None;
     let mut h: Option<u32> = None;
     let mut fps: Option<u32> = None;
     let mut positional = 0;
 
-    for line in args_str.lines() {
-        let line = line.trim().trim_end_matches(',').trim();
-        if line.is_empty() { continue; }
+    for arg in split_top_level_args(args_str) {
+        if arg.is_empty() { continue; }
 
-        if let Some(eq_pos) = line.find('=') {
-            let key = line[..eq_pos].trim();
-            let val = resolve(&line[eq_pos+1..]);
+        if let Some(eq_pos) = arg.find('=') {
+            let key = arg[..eq_pos].trim();
+            let val = resolve(&arg[eq_pos+1..]);
             match key {
                 "w" | "width"  => w = val,
                 "h" | "height" => h = val,
@@ -245,9 +305,9 @@ fn parse_pyxel_init(script: &str) -> Option<(u32, u32, u32)> {
             }
         } else {
             match positional {
-                0 => w = resolve(line),
-                1 => h = resolve(line),
-                3 => fps = resolve(line),
+                0 => w = resolve(arg),
+                1 => h = resolve(arg),
+                3 => fps = resolve(arg),
                 _ => {}
             }
             positional += 1;
@@ -330,8 +390,12 @@ struct RetroGameInfo {
 #[allow(static_mut_refs)]
 pub unsafe extern "C" fn retro_load_game(game: *const c_void) -> bool {
     if game.is_null() {
-        // Content-less boot: launch the built-in file browser frontend
-        const FRONTEND_PY: &str = include_str!("../frontend.py");
+        // Content-less boot: show the splash screen first (see retro_run(),
+        // which calls launch_frontend() once SPLASH_COUNT reaches
+        // SPLASH_FRAMES). Previously this ran frontend.py immediately,
+        // which set PY_UPDATE/PY_DRAW before retro_run() ever got a
+        // chance to take the splash branch — so the splash was never
+        // actually shown.
         PY_UPDATE = None;
         PY_DRAW   = None;
         SPLASH_COUNT = 0;
@@ -342,6 +406,7 @@ pub unsafe extern "C" fn retro_load_game(game: *const c_void) -> bool {
         RETRO_FRAME_COUNT = 0;
         LR_FRAME_COUNT    = 0;
         audio::PREV_BUTTONS = 0;
+        reset_color_palette();
         // Stop audio from previous content
         if PYXEL_READY {
             pyxel_core::pyxel().stop_all_channels();
@@ -358,25 +423,12 @@ pub unsafe extern "C" fn retro_load_game(game: *const c_void) -> bool {
             let geometry = rust_libretro_sys::retro_game_geometry {
                 base_width:   128,
                 base_height:  128,
-                max_width:    256,
-                max_height:   256,
+                max_width:    512,
+                max_height:   512,
                 aspect_ratio: 1.0,
             };
             env(37, &geometry as *const _ as *mut c_void);
         }
-        Python::with_gil(|py| {
-            let globals = pyo3::types::PyDict::new_bound(py);
-            let _ = globals.set_item("__name__", "__main__");
-            match py.run_bound(FRONTEND_PY, Some(&globals), None) {
-                Ok(_) => {
-                    PY_UPDATE = globals.get_item("update").ok()
-                        .flatten().map(|f| f.into());
-                    PY_DRAW = globals.get_item("draw").ok()
-                        .flatten().map(|f| f.into());
-                }
-                Err(e) => { e.print(py); }
-            }
-        });
         return true;
     }
     let info = &*(game as *const RetroGameInfo);
@@ -429,8 +481,8 @@ pub unsafe extern "C" fn retro_load_game(game: *const c_void) -> bool {
         let geometry = rust_libretro_sys::retro_game_geometry {
             base_width:   GAME_W,
             base_height:  GAME_H,
-            max_width:    256,
-            max_height:   256,
+            max_width:    512,
+            max_height:   512,
             aspect_ratio: GAME_W as f32 / GAME_H as f32,
         };
         env(37, &geometry as *const _ as *mut c_void);
@@ -445,6 +497,7 @@ pub unsafe extern "C" fn retro_load_game(game: *const c_void) -> bool {
         RETRO_FRAME_COUNT = 0;
         LR_FRAME_COUNT    = 0;
         audio::PREV_BUTTONS = 0;
+        reset_color_palette();
 
         // Clear cached modules from previous game to prevent import conflicts.
         // Without this, modules like 'constants' from game A would be reused
@@ -621,7 +674,10 @@ pub unsafe extern "C" fn retro_run() {
             SPLASH_COUNT += 1;
             splash::draw();
         } else {
-            pyxel_core::pyxel().clear(0);
+            // Splash finished — launch the frontend now (deferred from
+            // retro_load_game()'s content-less boot so the splash actually
+            // gets a chance to show first).
+            launch_frontend();
         }
     }
 
@@ -640,6 +696,16 @@ pub unsafe extern "C" fn retro_run() {
 
     // Always submit audio every frame (accumulator handles 367/368 alternation)
     audio::submit_audio_frame();
+
+    // Rebuild the RGB565 palette LUT every frame before submitting.
+    // pyxel_core::colors() (the global palette) can change at runtime —
+    // e.g. Image.from_image(filename, include_colors=True) clears and
+    // rebuilds it with colors from the loaded file. build_palette_lut()
+    // was previously only called once at boot, so any color index added
+    // after that (e.g. sprite colors beyond the default 16) stayed at
+    // its zero-initialized (black) LUT entry forever. This is cheap
+    // (256 entries) so redoing it every frame is not a concern.
+    video::build_palette_lut();
 
     // Submit framebuffer to RetroArch every frame to keep display smooth
     video::submit_pyxel_frame();
@@ -661,6 +727,7 @@ unsafe fn launch_frontend() {
     RETRO_FRAME_COUNT = 0;
     LR_FRAME_COUNT    = 0;
     audio::PREV_BUTTONS = 0;
+    reset_color_palette();
     if PYXEL_READY {
         pyxel_core::pyxel().stop_all_channels();
     }
@@ -675,8 +742,8 @@ unsafe fn launch_frontend() {
         let geometry = rust_libretro_sys::retro_game_geometry {
             base_width:   128,
             base_height:  128,
-            max_width:    256,
-            max_height:   256,
+            max_width:    512,
+            max_height:   512,
             aspect_ratio: 1.0,
         };
         env(37, &geometry as *const _ as *mut c_void);
@@ -709,6 +776,7 @@ unsafe fn load_game_from_path(path: &str) {
     RETRO_FRAME_COUNT = 0;
     LR_FRAME_COUNT    = 0;
     audio::PREV_BUTTONS = 0;
+    reset_color_palette();
     // Note: SPLASH_COUNT is NOT reset here; splash only shows on core-less boot
 
     // Stop audio
@@ -748,8 +816,8 @@ unsafe fn load_game_from_path(path: &str) {
         let geometry = rust_libretro_sys::retro_game_geometry {
             base_width:   GAME_W,
             base_height:  GAME_H,
-            max_width:    256,
-            max_height:   256,
+            max_width:    512,
+            max_height:   512,
             aspect_ratio: GAME_W as f32 / GAME_H as f32,
         };
         env(37, &geometry as *const _ as *mut c_void);
