@@ -402,8 +402,11 @@ pub unsafe extern "C" fn retro_load_game(game: *const c_void) -> bool {
         // Reset game dimensions to default for frontend
         GAME_W   = 128;
         GAME_H   = 128;
+        *pyxel_core::width()  = GAME_W;
+        *pyxel_core::height() = GAME_H;
         GAME_FPS = 30;
         RETRO_FRAME_COUNT = 0;
+        *pyxel_core::frame_count() = 0;
         LR_FRAME_COUNT    = 0;
         audio::PREV_BUTTONS = 0;
         reset_color_palette();
@@ -460,6 +463,8 @@ pub unsafe extern "C" fn retro_load_game(game: *const c_void) -> bool {
             eprintln!("[lr-pyxel] parsed init: w={w} h={h} fps={fps}");
             GAME_W   = w;
             GAME_H   = h;
+            *pyxel_core::width()  = w;
+            *pyxel_core::height() = h;
             GAME_FPS = fps;
         } else {
             eprintln!("[lr-pyxel] parse_pyxel_init: not found, using defaults");
@@ -495,6 +500,7 @@ pub unsafe extern "C" fn retro_load_game(game: *const c_void) -> bool {
 
         // Reset frame counters for new content
         RETRO_FRAME_COUNT = 0;
+        *pyxel_core::frame_count() = 0;
         LR_FRAME_COUNT    = 0;
         audio::PREV_BUTTONS = 0;
         reset_color_palette();
@@ -654,8 +660,13 @@ pub unsafe extern "C" fn retro_run() {
 
     if unsafe { PY_UPDATE.is_some() || PY_DRAW.is_some() } {
         if should_update {
-            LR_FRAME_COUNT += 1;
-
+            // LR_FRAME_COUNT is incremented AFTER update()/draw() run (not
+            // before), so the very first call sees pyxel.frame_count == 0,
+            // matching upstream Pyxel semantics. Incrementing beforehand
+            // made the first update() see frame_count == 1, so any script
+            // logic keyed on "every N frames starting from frame 0" (e.g.
+            // 15_tiled_map_file.py's `if frame_count % 240 == 0`) only
+            // fired once N frames had already elapsed, not immediately.
             Python::with_gil(|py| {
                 if let Some(ref update) = PY_UPDATE {
                     if let Err(e) = update.call0(py) { e.print(py); }
@@ -664,6 +675,7 @@ pub unsafe extern "C" fn retro_run() {
                     if let Err(e) = draw.call0(py) { e.print(py); }
                 }
             });
+            LR_FRAME_COUNT += 1;
 
             pyxel_core::pyxel().flip_screen();
         }
@@ -723,8 +735,11 @@ unsafe fn launch_frontend() {
     PY_DRAW   = None;
     GAME_W   = 128;
     GAME_H   = 128;
+    *pyxel_core::width()  = GAME_W;
+    *pyxel_core::height() = GAME_H;
     GAME_FPS = 30;
     RETRO_FRAME_COUNT = 0;
+    *pyxel_core::frame_count() = 0;
     LR_FRAME_COUNT    = 0;
     audio::PREV_BUTTONS = 0;
     reset_color_palette();
@@ -774,6 +789,7 @@ unsafe fn load_game_from_path(path: &str) {
     PY_UPDATE = None;
     PY_DRAW   = None;
     RETRO_FRAME_COUNT = 0;
+    *pyxel_core::frame_count() = 0;
     LR_FRAME_COUNT    = 0;
     audio::PREV_BUTTONS = 0;
     reset_color_palette();
@@ -807,6 +823,8 @@ unsafe fn load_game_from_path(path: &str) {
             eprintln!("[lr-pyxel] frontend launch: w={w} h={h} fps={fps}");
             GAME_W   = w;
             GAME_H   = h;
+            *pyxel_core::width()  = w;
+            *pyxel_core::height() = h;
             GAME_FPS = fps;
         }
     }

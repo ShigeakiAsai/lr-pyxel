@@ -4,7 +4,7 @@
 //! and submits it to RetroArch via the video callback.
 
 use std::os::raw::{c_uint, c_void};
-use pyxel_core::{colors, screen, width, height};
+use pyxel_core::{colors, screen, height};
 
 use crate::{VIDEO_CB, PALETTE_RGB565, SCREEN_W, SCREEN_H, GAME_W, GAME_H};
 
@@ -21,11 +21,21 @@ pub unsafe fn build_palette_lut() {
 
 /// Submit the current Pyxel screen buffer to RetroArch.
 pub unsafe fn submit_pyxel_frame() {
-    let src_w = *width()  as usize;
+    let screen_rc = screen();
+
+    // src_w must be the ACTUAL physical canvas stride (how many pixels
+    // one row occupies in memory), not the per-game logical width now
+    // reported by pyxel_core::width(). The canvas itself is a fixed
+    // SCREEN_W x SCREEN_H buffer allocated once at boot and never
+    // resized — only pyxel_core::width()/height() are updated per game
+    // (so Python's pyxel.width/height report the right value). Using
+    // the logical width here previously desynced the row stride from
+    // the real memory layout, corrupting the image into diagonal/
+    // scanline garbage whenever GAME_W no longer equaled 512.
+    let src_w = (*screen_rc.get()).width() as usize;
     let dst_w = (GAME_W as usize).min(src_w);
     let dst_h = (GAME_H as usize).min(*height() as usize);
 
-    let screen_rc = screen();
     let src: *const u8 = (*screen_rc.get()).data_ptr() as *const u8;
 
     let mut fb = vec![0u16; dst_w * dst_h];
