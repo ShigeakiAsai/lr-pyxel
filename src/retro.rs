@@ -267,10 +267,13 @@ unsafe fn show_retroarch_message(text: &str, frames: u32) {
     }
 }
 
-fn parse_pyxel_init(script: &str) -> Option<(u32, u32, u32)> {
-    // Build variable map from simple assignments (VAR = NUMBER)
-    let mut var_map: std::collections::HashMap<&str, u32> = std::collections::HashMap::new();
-    for line in script.lines() {
+// Collects simple `VAR = NUMBER` top-level assignments from a chunk of
+// Python source text into var_map. Used both for the entry script itself
+// and for sibling .py files (see read_sibling_py_sources), so constants
+// imported from another module (e.g. `from const import APP_WIDTH`) can
+// still be resolved.
+fn collect_int_vars(text: &str, var_map: &mut std::collections::HashMap<String, u32>) {
+    for line in text.lines() {
         let line = line.trim();
         if line.starts_with('#') { continue; }
         if let Some(eq_pos) = line.find('=') {
@@ -278,15 +281,68 @@ fn parse_pyxel_init(script: &str) -> Option<(u32, u32, u32)> {
             let val_str = line[eq_pos+1..].trim();
             if key.chars().all(|c| c.is_alphanumeric() || c == '_') && !key.is_empty() {
                 if let Ok(n) = val_str.parse::<u32>() {
-                    var_map.insert(key, n);
+                    var_map.insert(key.to_string(), n);
                 }
             }
         }
     }
+}
 
-    // Find pyxel.init( and extract content
-    let init_pos = script.find("pyxel.init(")?;
-    let after = &script[init_pos + "pyxel.init(".len()..];
+// Reads every sibling .py file next to the entry script (same directory),
+// for cross-file constant resolution in parse_pyxel_init(). Packages with
+// subdirectories (entities/, scenes/, etc.) aren't recursed into — this
+// only covers the common "constants live in a sibling module" pattern.
+fn read_sibling_py_sources(script_path: &str) -> Vec<String> {
+    let mut sources = Vec::new();
+    let script_path = std::path::Path::new(script_path);
+    let Some(dir) = script_path.parent() else { return sources; };
+    let Ok(entries) = std::fs::read_dir(dir) else { return sources; };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) == Some("py")
+            && path.file_name() != script_path.file_name()
+        {
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                sources.push(content);
+            }
+        }
+    }
+    sources
+}
+
+fn parse_pyxel_init(script: &str, extra_sources: &[String]) -> Option<(u32, u32, u32)> {
+    // Detect `import pyxel as ALIAS` so `ALIAS.init(...)` is found too —
+    // searching only for the literal "pyxel.init(" silently misses scripts
+    // like vortexion's main.py, which does `import pyxel as px` then
+    // calls `px.init(...)`.
+    let pyxel_name = {
+        let mut name = "pyxel".to_string();
+        for line in script.lines() {
+            let line = line.trim();
+            if let Some(rest) = line.strip_prefix("import pyxel as ") {
+                let alias = rest.trim().split_whitespace().next()
+                    .unwrap_or("").trim_end_matches(',');
+                if !alias.is_empty() {
+                    name = alias.to_string();
+                    break;
+                }
+            }
+        }
+        name
+    };
+    let init_needle = format!("{pyxel_name}.init(");
+
+    // Build variable map from simple assignments (VAR = NUMBER), scanning
+    // both the entry script and any sibling .py files.
+    let mut var_map: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+    collect_int_vars(script, &mut var_map);
+    for extra in extra_sources {
+        collect_int_vars(extra, &mut var_map);
+    }
+
+    // Find <pyxel_name>.init( and extract content
+    let init_pos = script.find(&init_needle)?;
+    let after = &script[init_pos + init_needle.len()..];
     let mut depth = 1;
     let mut end = 0;
     for (i, c) in after.char_indices() {
@@ -428,6 +484,7 @@ pub unsafe extern "C" fn retro_load_game(game: *const c_void) -> bool {
         *pyxel_core::frame_count() = 0;
         LR_FRAME_COUNT    = 0;
         audio::PREV_BUTTONS = 0;
+        audio::reset_all_button_states();
         reset_color_palette();
         // Stop audio from previous content
         if PYXEL_READY {
@@ -478,7 +535,8 @@ pub unsafe extern "C" fn retro_load_game(game: *const c_void) -> bool {
     // Static analysis: parse pyxel.init() args BEFORE running the script
     // to set the correct screen size and fps (problem⑤)
     if let Ok(code) = std::fs::read_to_string(&script_path) {
-        if let Some((w, h, fps)) = parse_pyxel_init(&code) {
+        let sibling_sources = read_sibling_py_sources(&script_path);
+        if let Some((w, h, fps)) = parse_pyxel_init(&code, &sibling_sources) {
             eprintln!("[lr-pyxel] parsed init: w={w} h={h} fps={fps}");
             GAME_W   = w;
             GAME_H   = h;
@@ -522,6 +580,7 @@ pub unsafe extern "C" fn retro_load_game(game: *const c_void) -> bool {
         *pyxel_core::frame_count() = 0;
         LR_FRAME_COUNT    = 0;
         audio::PREV_BUTTONS = 0;
+        audio::reset_all_button_states();
         reset_color_palette();
 
         // Clear cached modules from previous game to prevent import conflicts.
@@ -765,6 +824,7 @@ unsafe fn launch_frontend() {
     *pyxel_core::frame_count() = 0;
     LR_FRAME_COUNT    = 0;
     audio::PREV_BUTTONS = 0;
+    audio::reset_all_button_states();
     reset_color_palette();
     if PYXEL_READY {
         pyxel_core::pyxel().stop_all_channels();
@@ -815,6 +875,7 @@ unsafe fn load_game_from_path(path: &str) {
     *pyxel_core::frame_count() = 0;
     LR_FRAME_COUNT    = 0;
     audio::PREV_BUTTONS = 0;
+    audio::reset_all_button_states();
     reset_color_palette();
     // Note: SPLASH_COUNT is NOT reset here; splash only shows on core-less boot
 
@@ -842,7 +903,8 @@ unsafe fn load_game_from_path(path: &str) {
 
     // Static analysis
     if let Ok(code) = std::fs::read_to_string(&script_path) {
-        if let Some((w, h, fps)) = parse_pyxel_init(&code) {
+        let sibling_sources = read_sibling_py_sources(&script_path);
+        if let Some((w, h, fps)) = parse_pyxel_init(&code, &sibling_sources) {
             eprintln!("[lr-pyxel] frontend launch: w={w} h={h} fps={fps}");
             GAME_W   = w;
             GAME_H   = h;
@@ -866,13 +928,37 @@ unsafe fn load_game_from_path(path: &str) {
 
     // Execute the script
     Python::with_gil(|py| {
-        // Clear sys.modules of previous game
+        // Clear cached modules from the previous game to prevent import
+        // conflicts. Previously this only removed math/random/struct
+        // (the stub modules); any other same-named module left behind by
+        // a prior game (e.g. a common convention like `game`, `scenes`,
+        // `entities`, `constants`) would be silently reused from
+        // sys.modules instead of being re-imported from the new game's
+        // own files — no exception, just wrong code running (or, if the
+        // reused module's shape didn't match what the new game expected,
+        // it could stall before ever reaching pyxel.run()). This mirrors
+        // the thorough cleanup already used in retro_load_game()'s
+        // direct-game-load branch.
         if let Ok(sys) = py.import_bound("sys") {
             if let Ok(modules) = sys.getattr("modules") {
-                if let Ok(d) = modules.downcast_into::<pyo3::types::PyDict>() {
-                    let _ = d.del_item("math");
-                    let _ = d.del_item("random");
-                    let _ = d.del_item("struct");
+                if let Ok(modules_dict) = modules.downcast_into::<pyo3::types::PyDict>() {
+                    let keys_to_remove: Vec<String> = modules_dict
+                        .keys()
+                        .iter()
+                        .filter_map(|k| k.extract::<String>().ok())
+                        .filter(|k| {
+                            !k.starts_with('_')
+                                && !matches!(k.as_str(),
+                                    "sys" | "builtins" | "pyxel" | "os" | "os.path"
+                                    | "io" | "abc" | "types" | "typing" | "functools"
+                                    | "collections" | "itertools" | "operator"
+                                    | "re" | "enum" | "warnings" | "weakref"
+                                )
+                        })
+                        .collect();
+                    for key in keys_to_remove {
+                        let _ = modules_dict.del_item(key);
+                    }
                 }
             }
             // Update sys.path

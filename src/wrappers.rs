@@ -391,15 +391,19 @@ pub fn sound_set(
 // Audio functions (audio_wrapper.rs)
 // ---------------------------------------------------------------------------
 
-// play(ch, snd, sec=None, loop=False, resume=False)
+// play(ch, snd, sec=None, loop=False, resume=False, tick=None)
 // snd can be a single sound index (u32) or a list of sound indices (Vec<u32>)
+// tick is an alternate way to specify the start position (1 tick = 1/120
+// sec), restored in upstream Pyxel after being replaced by `sec` in 2.4.
+// If both are given, tick takes precedence.
 #[pyfunction]
-#[pyo3(signature = (ch, snd, sec=None, r#loop=None, resume=None))]
-pub fn play(ch: u32, snd: pyo3::Bound<'_, pyo3::PyAny>, sec: Option<f32>, r#loop: Option<bool>, resume: Option<bool>) -> PyResult<()> {
+#[pyo3(signature = (ch, snd, sec=None, r#loop=None, resume=None, tick=None))]
+pub fn play(ch: u32, snd: pyo3::Bound<'_, pyo3::PyAny>, sec: Option<f32>, r#loop: Option<bool>, resume: Option<bool>, tick: Option<f32>) -> PyResult<()> {
     unsafe {
         if !PYXEL_READY { return Ok(()); }
         let should_loop   = r#loop.unwrap_or(false);
         let should_resume = resume.unwrap_or(false);
+        let sec = tick.map(|t| t / 120.0).or(sec);
         if let Ok(idx) = snd.extract::<u32>() {
             pyxel_core::pyxel().play_sound(ch, idx, sec, should_loop, should_resume);
         } else if let Ok(seq) = snd.extract::<Vec<u32>>() {
@@ -413,12 +417,15 @@ pub fn play(ch: u32, snd: pyo3::Bound<'_, pyo3::PyAny>, sec: Option<f32>, r#loop
     }
 }
 
-// playm(msc, sec=None, loop=False)
+// playm(msc, sec=None, loop=False, tick=None)
+// tick is an alternate way to specify the start position (1 tick = 1/120
+// sec); if both sec and tick are given, tick takes precedence.
 #[pyfunction]
-#[pyo3(signature = (msc, sec=None, r#loop=None))]
-pub fn playm(msc: u32, sec: Option<f32>, r#loop: Option<bool>) {
+#[pyo3(signature = (msc, sec=None, r#loop=None, tick=None))]
+pub fn playm(msc: u32, sec: Option<f32>, r#loop: Option<bool>, tick: Option<f32>) {
     unsafe {
         if PYXEL_READY {
+            let sec = tick.map(|t| t / 120.0).or(sec);
             pyxel_core::pyxel().play_music(msc, sec, r#loop.unwrap_or(false));
         }
     }
@@ -1749,14 +1756,15 @@ impl PyChannel {
         unsafe { (&mut *self.rc().get()).detune = detune; }
     }
 
-    #[pyo3(signature = (snd, sec=None, r#loop=None, resume=None))]
-    pub fn play(&self, snd: u32, sec: Option<f32>, r#loop: Option<bool>, resume: Option<bool>) -> PyResult<()> {
+    #[pyo3(signature = (snd, sec=None, r#loop=None, resume=None, tick=None))]
+    pub fn play(&self, snd: u32, sec: Option<f32>, r#loop: Option<bool>, resume: Option<bool>, tick: Option<f32>) -> PyResult<()> {
         unsafe {
             if !PYXEL_READY { return Ok(()); }
             let sound = pyxel_core::sounds().get(snd as usize)
                 .cloned()
                 .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("Invalid sound index"))?;
             let ch = &mut *self.rc().get();
+            let sec = tick.map(|t| t / 120.0).or(sec);
             ch.play_sound(sound, sec, r#loop.unwrap_or(false), resume.unwrap_or(false));
         }
         Ok(())
@@ -1775,6 +1783,48 @@ impl PyChannel {
             if !PYXEL_READY { return None; }
             (&mut *self.rc().get()).play_position()
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Colors wrapper — live view onto pyxel_core::colors() (the palette)
+// ---------------------------------------------------------------------------
+// Previously `pyxel.colors` (via __getattr__) returned a brand new PyList
+// copied from pyxel_core::colors() on every access. That meant writes
+// like `pyxel.colors[:] = PALETTE` or `pyxel.colors[i] = 0x123456`
+// mutated only that disposable copy and were silently lost — the actual
+// global palette was never updated. This class instead reads/writes
+// pyxel_core::colors() directly, matching the existing ChannelList
+// pattern for single-index vs. full-slice assignment.
+#[pyclass(name = "Colors")]
+pub struct PyColors;
+
+#[pymethods]
+impl PyColors {
+    pub fn __len__(&self) -> usize {
+        pyxel_core::colors().len()
+    }
+
+    pub fn __getitem__(&self, idx: usize) -> PyResult<u32> {
+        pyxel_core::colors().get(idx).copied()
+            .ok_or_else(|| pyo3::exceptions::PyIndexError::new_err("color index out of range"))
+    }
+
+    pub fn __setitem__(&self, idx: pyo3::Bound<'_, pyo3::PyAny>, val: pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<()> {
+        if let Ok(i) = idx.extract::<usize>() {
+            // Single index assignment: colors[i] = 0xRRGGBB
+            let v = val.extract::<u32>()?;
+            let colors = pyxel_core::colors();
+            if i >= colors.len() {
+                return Err(pyo3::exceptions::PyIndexError::new_err("color index out of range"));
+            }
+            colors[i] = v;
+        } else {
+            // Slice assignment: colors[:] = [0x.., 0x.., ...]
+            let items = val.extract::<Vec<u32>>()?;
+            *pyxel_core::colors() = items;
+        }
+        Ok(())
     }
 }
 
@@ -2024,10 +2074,7 @@ pub fn __getattr__(py: Python, name: &str) -> PyResult<Py<PyAny>> {
         "mouse_y"     => (*pyxel_core::mouse_y()).into_py(py),
         "mouse_wheel" => (*pyxel_core::mouse_wheel()).into_py(py),
         // Graphics
-        "colors"   => {
-            let pal = pyxel_core::colors();
-            pyo3::types::PyList::new_bound(py, pal.iter().copied()).into()
-        },
+        "colors"   => PyColors.into_py(py),
         "images"   => PyImageList.into_py(py),
         "tilemaps" => PyTilemapList.into_py(py),
         // Audio
@@ -2145,6 +2192,7 @@ pub fn pyxel(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Register pyclass types
     m.add_class::<PyImage>()?;
     m.add_class::<PyFont>()?;
+    m.add_class::<PyColors>()?;
     m.add_class::<PyImageList>()?;
     m.add_class::<PySound>()?;
     m.add_class::<PySoundList>()?;
