@@ -97,16 +97,6 @@ pub unsafe extern "C" fn retro_get_system_av_info(info: *mut c_void) {
 
 #[no_mangle]
 pub unsafe extern "C" fn retro_init() {
-    // Always write stubs (even on re-init) so they're up to date
-    const MATH_PY:   &str = include_str!("../math.py");
-    const RANDOM_PY: &str = include_str!("../random.py");
-    const STRUCT_PY: &str = include_str!("../struct.py");
-    let stub_dir = std::path::Path::new("/tmp/lr-pyxel-stdlib");
-    let _ = std::fs::create_dir_all(stub_dir);
-    let _ = std::fs::write(stub_dir.join("math.py"),   MATH_PY);
-    let _ = std::fs::write(stub_dir.join("random.py"), RANDOM_PY);
-    let _ = std::fs::write(stub_dir.join("struct.py"), STRUCT_PY);
-
     // Guard: only initialize once. RetroArch may call retro_init() again
     // when switching content without fully unloading the core.
     if PYXEL_READY {
@@ -141,26 +131,43 @@ pub unsafe extern "C" fn retro_init() {
     video::build_palette_lut();
     PYXEL_READY = true;
 
+    // Re-open libpython3.11 with RTLD_GLOBAL so extension modules that
+    // CPython itself loads via dlopen() (e.g. _contextvars.so) can
+    // resolve symbols against it. RetroArch dlopen()s this core (and
+    // this core's libpython3.11.so dependency, linked via RUSTFLAGS in
+    // package.mk) without RTLD_GLOBAL by default, so those symbols
+    // aren't visible to further dlopen() calls made from within CPython
+    // — a well-known pitfall of embedding CPython inside a plugin-style
+    // shared library (the same problem mod_wsgi and similar embeddings
+    // solve the same way). Confirmed the underlying library/extension
+    // build itself is fine: a bare `python3.11 -c "import _contextvars"`
+    // on the same device succeeds — only the symbol visibility when
+    // dlopen()'d from inside another shared library was the problem.
+    {
+        let name = std::ffi::CString::new("libpython3.11.so").unwrap();
+        let handle = libc::dlopen(name.as_ptr(), libc::RTLD_NOW | libc::RTLD_GLOBAL);
+        if handle.is_null() {
+            eprintln!(
+                "[lr-pyxel] warning: failed to re-dlopen libpython3.11.so with \
+                 RTLD_GLOBAL; some Python stdlib C extensions may fail to import"
+            );
+        }
+    }
+
     // Start Python interpreter (after append_to_inittab)
     pyo3::prepare_freethreaded_python();
 
-    // Remove problematic .so modules from sys.modules so our stubs are loaded
-    Python::with_gil(|py| {
-        if let Ok(sys) = py.import_bound("sys") {
-            if let Ok(path) = sys.getattr("path") {
-                if let Ok(syspath) = path.downcast_into::<pyo3::types::PyList>() {
-                    let _ = syspath.insert(0, "/tmp/lr-pyxel-stdlib");
-                }
-            }
-            if let Ok(modules) = sys.getattr("modules") {
-                if let Ok(d) = modules.downcast_into::<pyo3::types::PyDict>() {
-                    let _ = d.del_item("math");
-                    let _ = d.del_item("random");
-                    let _ = d.del_item("struct");
-                }
-            }
-        }
-    });
+    // Note (v0.10.0): math/random/struct used to be force-replaced with
+    // hand-written pure-Python stubs here, because their compiled
+    // extensions (math.so/_random.so/_struct.so) failed to load with
+    // undefined-symbol errors. That turned out to be the same
+    // RTLD_GLOBAL/dlopen symbol-visibility issue fixed above for
+    // _contextvars, not an actual incompatibility — with that fixed,
+    // the real stdlib modules load correctly, so the stubs (and the
+    // whack-a-mole of adding missing functions to them, e.g.
+    // erf/erfc/fsum) were retired. See git history for the old
+    // stub-forcing code and the stub files themselves if this ever
+    // needs revisiting.
 }
 
 #[no_mangle]

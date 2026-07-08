@@ -1146,6 +1146,25 @@ impl PyImage {
         unsafe { (&*self.rc().get()).height() }
     }
 
+    // data_ptr() -> ctypes array of c_uint8
+    // Returns the image's raw pixel buffer as a live ctypes view (no
+    // copy) — one byte per pixel, palette index 0-255, row-major,
+    // width*height bytes total. Used by scripts that need bulk pixel
+    // access faster than pset()/pget() one at a time (e.g. procedural
+    // noise effects).
+    pub fn data_ptr(&self, py: Python) -> PyResult<PyObject> {
+        unsafe {
+            let img = &mut *self.rc().get();
+            let size = (img.width() * img.height()) as usize;
+            let ptr = img.data_ptr() as usize;
+            let ctypes = py.import_bound("ctypes")?;
+            let c_uint8 = ctypes.getattr("c_uint8")?;
+            let array_type = c_uint8.call_method1("__mul__", (size,))?;
+            let array = array_type.call_method1("from_address", (ptr,))?;
+            Ok(array.into())
+        }
+    }
+
     pub fn set(&self, x: i32, y: i32, data: Vec<String>) {
         unsafe {
             let img = &mut *self.rc().get();
