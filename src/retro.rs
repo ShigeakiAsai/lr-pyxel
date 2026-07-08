@@ -103,6 +103,108 @@ pub unsafe extern "C" fn retro_init() {
         return;
     }
 
+    // v0.11.x de-Lakka-ification: ROMS_DIR.
+    //
+    // On Lakka, keep the established convention (/storage/roms/pyxel,
+    // matching /storage/roms/<console> for every other core) rather
+    // than any environment-call-based path: Lakka users expect to find
+    // a core's content there (e.g. via Samba), and neither environment
+    // call tried below actually points there anyway:
+    //   - GET_SYSTEM_DIRECTORY (cmd 9) → "/tmp/system" (confirmed a
+    //     persistent overlayfs backed by /storage/system, but that's
+    //     meant for BIOS/core config, not game content)
+    //   - GET_CORE_ASSETS_DIRECTORY (cmd 30, aka the deprecated alias
+    //     GET_CONTENT_DIRECTORY) → "/storage/roms/downloads", a shared
+    //     RetroArch-wide folder, not a pyxel-specific one
+    //
+    // On non-Lakka, there's no equivalent established convention, so
+    // prefer GET_CORE_ASSETS_DIRECTORY (semantically the closest match:
+    // "assets that the core needs such as art assets or level data"),
+    // then GET_SYSTEM_DIRECTORY, then a hardcoded last resort.
+    #[cfg(feature = "lakka")]
+    let roms_dir: String = "/storage/roms/pyxel".to_string();
+
+    #[cfg(not(feature = "lakka"))]
+    let roms_dir: String = {
+        const HARDCODED_FALLBACK: &str = "~/.local/share/lr-pyxel/roms";
+
+        let query = |cmd: u32| -> Option<String> {
+            unsafe {
+                let mut dir: *const std::os::raw::c_char = std::ptr::null();
+                let got = ENVIRON_CB.map(|cb| cb(cmd, &mut dir as *mut _ as *mut c_void)).unwrap_or(false);
+                if got && !dir.is_null() {
+                    std::ffi::CStr::from_ptr(dir).to_str().ok()
+                        .filter(|s| !s.is_empty())
+                        .map(|s| format!("{s}/pyxel"))
+                } else {
+                    None
+                }
+            }
+        };
+
+        query(30).or_else(|| query(9)).unwrap_or_else(|| HARDCODED_FALLBACK.to_string())
+    };
+
+    eprintln!("[lr-pyxel] ROMS_DIR = \"{roms_dir}\"");
+
+    // Create it if this is the first boot and the subfolder doesn't
+    // exist yet (frontend.py already tolerates a missing/unreadable
+    // directory, but creating it upfront is friendlier — no need for
+    // the person to mkdir it by hand before their first game will show).
+    if let Err(e) = std::fs::create_dir_all(&roms_dir) {
+        eprintln!("[lr-pyxel] warning: could not create ROMS_DIR \"{roms_dir}\": {e}");
+    }
+
+    std::env::set_var("LR_PYXEL_ROMS_DIR", &roms_dir);
+
+    // On Lakka, ROMS_DIR is treated as a hard root the launcher can't
+    // navigate above (matches the closed-appliance philosophy). On a
+    // general Linux install, allow navigating the whole filesystem,
+    // relying on OS permissions rather than an artificial boundary.
+    // (This is a navigation-policy choice, independent of where
+    // ROMS_DIR itself physically lives.)
+    #[cfg(feature = "lakka")]
+    std::env::set_var("LR_PYXEL_ROMS_ROOT_LOCKED", "1");
+    #[cfg(not(feature = "lakka"))]
+    std::env::set_var("LR_PYXEL_ROMS_ROOT_LOCKED", "0");
+
+    // {system_dir}/pyxel: lr-pyxel's own tools (currently just
+    // downloader.pyxapp), as opposed to ROMS_DIR (user content). Unlike
+    // ROMS_DIR this doesn't need a Lakka-specific override — it's
+    // exactly what GET_SYSTEM_DIRECTORY is meant for (core-owned
+    // assets/config, not game content), and applies the same way
+    // regardless of the "lakka" feature. On Lakka this resolves to
+    // "/tmp/system/pyxel", confirmed to be a persistent overlayfs
+    // (upperdir=/storage/system) rather than a throwaway tmpfs path.
+    let system_pyxel_dir: String = {
+        let mut dir: *const std::os::raw::c_char = std::ptr::null();
+        let got = ENVIRON_CB.map(|cb| cb(9, &mut dir as *mut _ as *mut c_void)).unwrap_or(false);
+        if got && !dir.is_null() {
+            std::ffi::CStr::from_ptr(dir).to_str().ok()
+                .filter(|s| !s.is_empty())
+                .map(|s| format!("{s}/pyxel"))
+                .unwrap_or_else(|| "/tmp/lr-pyxel-system".to_string())
+        } else {
+            "/tmp/lr-pyxel-system".to_string()
+        }
+    };
+    if let Err(e) = std::fs::create_dir_all(&system_pyxel_dir) {
+        eprintln!("[lr-pyxel] warning: could not create system_pyxel_dir \"{system_pyxel_dir}\": {e}");
+    }
+
+    // Extract the embedded downloader.pyxapp there if it isn't present
+    // yet (first boot, or after an update ships a newer embedded copy
+    // — see the version comment on DOWNLOADER_PYXAPP below). Previously
+    // the person had to place downloader.pyxapp in ROMS_DIR by hand.
+    const DOWNLOADER_PYXAPP: &[u8] = include_bytes!("../downloader.pyxapp");
+    let downloader_path = format!("{system_pyxel_dir}/downloader.pyxapp");
+    if !std::path::Path::new(&downloader_path).exists() {
+        if let Err(e) = std::fs::write(&downloader_path, DOWNLOADER_PYXAPP) {
+            eprintln!("[lr-pyxel] warning: could not write downloader.pyxapp to \"{downloader_path}\": {e}");
+        }
+    }
+    std::env::set_var("LR_PYXEL_DOWNLOADER_PATH", &downloader_path);
+
     // Register "pyxel" built-in module BEFORE Py_Initialize
     append_to_inittab!(pyxel);
 

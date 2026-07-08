@@ -1,10 +1,18 @@
 [package]
 name = "lr-pyxel"
-version = "0.10.0"
+version = "0.11.0"
 edition = "2021"
 
 [lib]
 crate-type = ["cdylib"]
+
+[features]
+# v0.11.x de-Lakka-ification: gates Lakka/LibreELEC-specific defaults
+# (e.g. ROMS_DIR="/storage/roms/pyxel"). Not a default feature — Lakka
+# builds must opt in explicitly (package.mk passes --features lakka).
+# Plain `cargo build` (e.g. for a generic Linux RetroArch) gets
+# non-Lakka-specific defaults instead.
+lakka = []
 
 [dependencies]
 rust-libretro-sys = "0.3.2"
