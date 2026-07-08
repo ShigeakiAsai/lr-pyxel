@@ -168,42 +168,50 @@ pub unsafe extern "C" fn retro_init() {
     #[cfg(not(feature = "lakka"))]
     std::env::set_var("LR_PYXEL_ROMS_ROOT_LOCKED", "0");
 
-    // {system_dir}/pyxel: lr-pyxel's own tools (currently just
-    // downloader.pyxapp), as opposed to ROMS_DIR (user content). Unlike
-    // ROMS_DIR this doesn't need a Lakka-specific override — it's
-    // exactly what GET_SYSTEM_DIRECTORY is meant for (core-owned
-    // assets/config, not game content), and applies the same way
-    // regardless of the "lakka" feature. On Lakka this resolves to
-    // "/tmp/system/pyxel", confirmed to be a persistent overlayfs
-    // (upperdir=/storage/system) rather than a throwaway tmpfs path.
-    let system_pyxel_dir: String = {
-        let mut dir: *const std::os::raw::c_char = std::ptr::null();
-        let got = ENVIRON_CB.map(|cb| cb(9, &mut dir as *mut _ as *mut c_void)).unwrap_or(false);
-        if got && !dir.is_null() {
-            std::ffi::CStr::from_ptr(dir).to_str().ok()
-                .filter(|s| !s.is_empty())
-                .map(|s| format!("{s}/pyxel"))
-                .unwrap_or_else(|| "/tmp/lr-pyxel-system".to_string())
-        } else {
-            "/tmp/lr-pyxel-system".to_string()
+    // The in-core downloader (embedding + auto-extraction to
+    // {system_dir}/pyxel/downloader.pyxapp) is Lakka-only by design —
+    // it assumes Lakka's model of "the core bundles its own content
+    // browser/fetcher". On non-Lakka builds this is simply not run, so
+    // LR_PYXEL_DOWNLOADER_PATH stays unset; frontend.py's existing
+    // fallback (os.path.join(ROMS_DIR, "downloader.pyxapp")) then
+    // naturally hides the [Download new games] entry unless the person
+    // has manually placed a downloader.pyxapp in ROMS_DIR themselves.
+    #[cfg(feature = "lakka")]
+    {
+        // {system_dir}/pyxel: lr-pyxel's own tools (currently just
+        // downloader.pyxapp), as opposed to ROMS_DIR (user content).
+        // This resolves to "/tmp/system/pyxel" on Lakka, confirmed to
+        // be a persistent overlayfs (upperdir=/storage/system) rather
+        // than a throwaway tmpfs path.
+        let system_pyxel_dir: String = {
+            let mut dir: *const std::os::raw::c_char = std::ptr::null();
+            let got = ENVIRON_CB.map(|cb| cb(9, &mut dir as *mut _ as *mut c_void)).unwrap_or(false);
+            if got && !dir.is_null() {
+                std::ffi::CStr::from_ptr(dir).to_str().ok()
+                    .filter(|s| !s.is_empty())
+                    .map(|s| format!("{s}/pyxel"))
+                    .unwrap_or_else(|| "/tmp/lr-pyxel-system".to_string())
+            } else {
+                "/tmp/lr-pyxel-system".to_string()
+            }
+        };
+        if let Err(e) = std::fs::create_dir_all(&system_pyxel_dir) {
+            eprintln!("[lr-pyxel] warning: could not create system_pyxel_dir \"{system_pyxel_dir}\": {e}");
         }
-    };
-    if let Err(e) = std::fs::create_dir_all(&system_pyxel_dir) {
-        eprintln!("[lr-pyxel] warning: could not create system_pyxel_dir \"{system_pyxel_dir}\": {e}");
-    }
 
-    // Extract the embedded downloader.pyxapp there if it isn't present
-    // yet (first boot, or after an update ships a newer embedded copy
-    // — see the version comment on DOWNLOADER_PYXAPP below). Previously
-    // the person had to place downloader.pyxapp in ROMS_DIR by hand.
-    const DOWNLOADER_PYXAPP: &[u8] = include_bytes!("../downloader.pyxapp");
-    let downloader_path = format!("{system_pyxel_dir}/downloader.pyxapp");
-    if !std::path::Path::new(&downloader_path).exists() {
-        if let Err(e) = std::fs::write(&downloader_path, DOWNLOADER_PYXAPP) {
-            eprintln!("[lr-pyxel] warning: could not write downloader.pyxapp to \"{downloader_path}\": {e}");
+        // Extract the embedded downloader.pyxapp there if it isn't
+        // present yet (first boot, or after an update ships a newer
+        // embedded copy). Previously the person had to place
+        // downloader.pyxapp in ROMS_DIR by hand.
+        const DOWNLOADER_PYXAPP: &[u8] = include_bytes!("../downloader.pyxapp");
+        let downloader_path = format!("{system_pyxel_dir}/downloader.pyxapp");
+        if !std::path::Path::new(&downloader_path).exists() {
+            if let Err(e) = std::fs::write(&downloader_path, DOWNLOADER_PYXAPP) {
+                eprintln!("[lr-pyxel] warning: could not write downloader.pyxapp to \"{downloader_path}\": {e}");
+            }
         }
+        std::env::set_var("LR_PYXEL_DOWNLOADER_PATH", &downloader_path);
     }
-    std::env::set_var("LR_PYXEL_DOWNLOADER_PATH", &downloader_path);
 
     // Register "pyxel" built-in module BEFORE Py_Initialize
     append_to_inittab!(pyxel);
@@ -233,24 +241,33 @@ pub unsafe extern "C" fn retro_init() {
     video::build_palette_lut();
     PYXEL_READY = true;
 
-    // Re-open libpython3.11 with RTLD_GLOBAL so extension modules that
+    // Re-open libpythonX.Y with RTLD_GLOBAL so extension modules that
     // CPython itself loads via dlopen() (e.g. _contextvars.so) can
     // resolve symbols against it. RetroArch dlopen()s this core (and
-    // this core's libpython3.11.so dependency, linked via RUSTFLAGS in
-    // package.mk) without RTLD_GLOBAL by default, so those symbols
-    // aren't visible to further dlopen() calls made from within CPython
-    // — a well-known pitfall of embedding CPython inside a plugin-style
-    // shared library (the same problem mod_wsgi and similar embeddings
-    // solve the same way). Confirmed the underlying library/extension
-    // build itself is fine: a bare `python3.11 -c "import _contextvars"`
-    // on the same device succeeds — only the symbol visibility when
+    // this core's libpythonX.Y.so dependency) without RTLD_GLOBAL by
+    // default, so those symbols aren't visible to further dlopen()
+    // calls made from within CPython — a well-known pitfall of
+    // embedding CPython inside a plugin-style shared library (the same
+    // problem mod_wsgi and similar embeddings solve the same way).
+    // Confirmed the underlying library/extension build itself is fine
+    // on Lakka: a bare `python3.11 -c "import _contextvars"` on the
+    // same device succeeds — only the symbol visibility when
     // dlopen()'d from inside another shared library was the problem.
+    //
+    // The version (X.Y) is NOT hardcoded: build.rs detects whatever
+    // Python PyO3 actually linked against (via pyo3-build-config, the
+    // same interpreter-discovery PyO3 itself uses) and bakes it in via
+    // LR_PYXEL_PYTHON_VERSION. This is "3.11" on Lakka (cross-compiled,
+    // package.mk sets PYO3_CROSS_PYTHON_VERSION=3.11) but automatically
+    // becomes whatever a native non-Lakka build's local python3 is
+    // (e.g. "3.12" on Ubuntu 24.04) with no code changes needed.
     {
-        let name = std::ffi::CString::new("libpython3.11.so").unwrap();
+        let lib_name = concat!("libpython", env!("LR_PYXEL_PYTHON_VERSION"), ".so");
+        let name = std::ffi::CString::new(lib_name).unwrap();
         let handle = libc::dlopen(name.as_ptr(), libc::RTLD_NOW | libc::RTLD_GLOBAL);
         if handle.is_null() {
             eprintln!(
-                "[lr-pyxel] warning: failed to re-dlopen libpython3.11.so with \
+                "[lr-pyxel] warning: failed to re-dlopen {lib_name} with \
                  RTLD_GLOBAL; some Python stdlib C extensions may fail to import"
             );
         }
