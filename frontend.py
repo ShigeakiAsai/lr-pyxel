@@ -75,7 +75,11 @@ def scan_entries():
 
 entries = scan_entries()
 cursor = 0
-MAX_VISIBLE = 12
+# 11 rows of 9px starting at y=14 end at y=113, leaving a clean gap
+# before the footer divider at y=117. MAX_VISIBLE=12 (the previous
+# value) put the last row's highlight rect at y=112..121, overlapping
+# both the footer line and "UP/DOWN:select A:launch" text beneath it.
+MAX_VISIBLE = 11
 scroll = 0
 
 # Auto-repeat for UP/DOWN cursor movement: wait REPEAT_HOLD frames after
