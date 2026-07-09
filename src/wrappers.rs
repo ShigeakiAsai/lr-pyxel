@@ -1905,6 +1905,18 @@ impl PyColors {
     pub fn clear(&self) {
         pyxel_core::colors().clear();
     }
+
+    // Alternate spelling some scripts use instead of colors[:] = [...]
+    // for a full bulk replace (e.g. the Mandelbrot palette-extension
+    // example, and dungeon-antiqua2.pyxapp's config loader). Same
+    // semantics as the slice-assignment branch of __setitem__.
+    pub fn from_list(&self, items: Vec<u32>) {
+        *pyxel_core::colors() = items;
+    }
+
+    pub fn to_list(&self) -> Vec<u32> {
+        pyxel_core::colors().clone()
+    }
 }
 
 #[pyclass(name = "ChannelList")]
@@ -1948,6 +1960,31 @@ impl PyChannelList {
             }
         }
         Ok(())
+    }
+
+    // List-like bulk methods, matching the existing slice-assignment
+    // semantics (channels[:] = [...]). Some scripts build a fresh list
+    // of standalone Channel() objects and hand the whole thing over at
+    // once via from_list() rather than slice syntax — found in
+    // dungeon-antiqua2.pyxapp's Sounds.set_volume(), which constructs
+    // one px.Channel() per bank with the desired gain and calls
+    // px.channels.from_list(channels).
+    pub fn from_list(&self, items: Vec<pyo3::PyRef<PyChannel>>) {
+        for (i, ch) in items.iter().enumerate() {
+            if i >= pyxel_core::NUM_CHANNELS as usize { break; }
+            unsafe {
+                let src = &*ch.rc().get();
+                let dst = &mut *pyxel_core::channels()[i].get();
+                dst.gain   = src.gain;
+                dst.detune = src.detune;
+            }
+        }
+    }
+
+    pub fn to_list(&self) -> Vec<PyChannel> {
+        (0..pyxel_core::NUM_CHANNELS as usize)
+            .map(|i| PyChannel { bank: i })
+            .collect()
     }
 }
 
