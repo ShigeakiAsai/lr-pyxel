@@ -976,6 +976,9 @@ pub unsafe extern "C" fn retro_run() {
 
     // Always inject input every frame
     audio::inject_input(buttons);
+    if let Some(state) = INPUT_STATE {
+        audio::inject_mouse_input(state);
+    }
 
     // Check if frontend requested a content load
     if let Some(path) = PENDING_CONTENT.take() {

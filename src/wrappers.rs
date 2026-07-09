@@ -931,15 +931,7 @@ pub fn btnv(key: u32) -> i32 {
 }
 #[pyfunction]
 pub fn mouse(visible: bool) {
-    // Real mouse input isn't implemented yet (retro_run() only polls
-    // RETRO_DEVICE_JOYPAD, never RETRO_DEVICE_MOUSE), so mouse_x/mouse_y
-    // never move from their initial value. pyxel_core's own flip_screen()
-    // still draws the cursor sprite at (mouse_x, mouse_y) whenever
-    // visibility is on, which would show a static, non-functional cursor
-    // stuck in place. Force it hidden regardless of what the script
-    // requests until mouse input is actually wired up.
-    let _ = visible;
-    unsafe { if PYXEL_READY { pyxel_core::pyxel().set_mouse_visible(false); } }
+    unsafe { if PYXEL_READY { pyxel_core::pyxel().set_mouse_visible(visible); } }
 }
 
 #[pyfunction]
