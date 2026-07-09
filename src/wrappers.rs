@@ -1860,6 +1860,37 @@ impl PyColors {
         }
         Ok(())
     }
+
+    // List-like growth methods. pyxel.colors is documented as a plain
+    // list of the palette's colors, so scripts reasonably treat it like
+    // one (e.g. growing it to 256 entries after loading a shorter
+    // .pyxpal file with pyxel.colors.append(0)).
+    pub fn append(&self, val: u32) {
+        pyxel_core::colors().push(val);
+    }
+
+    pub fn extend(&self, vals: Vec<u32>) {
+        pyxel_core::colors().extend(vals);
+    }
+
+    #[pyo3(signature = (idx=None))]
+    pub fn pop(&self, idx: Option<i64>) -> PyResult<u32> {
+        let colors = pyxel_core::colors();
+        let len = colors.len() as i64;
+        if len == 0 {
+            return Err(pyo3::exceptions::PyIndexError::new_err("pop from empty colors list"));
+        }
+        let i = idx.unwrap_or(-1);
+        let i = if i < 0 { i + len } else { i };
+        if i < 0 || i >= len {
+            return Err(pyo3::exceptions::PyIndexError::new_err("pop index out of range"));
+        }
+        Ok(colors.remove(i as usize))
+    }
+
+    pub fn clear(&self) {
+        pyxel_core::colors().clear();
+    }
 }
 
 #[pyclass(name = "ChannelList")]
@@ -2109,6 +2140,7 @@ pub fn __getattr__(py: Python, name: &str) -> PyResult<Py<PyAny>> {
         "mouse_wheel" => (*pyxel_core::mouse_wheel()).into_py(py),
         // Graphics
         "colors"   => PyColors.into_py(py),
+        "screen"   => PyImage { image: pyxel_core::screen().clone() }.into_py(py),
         "images"   => PyImageList.into_py(py),
         "tilemaps" => PyTilemapList.into_py(py),
         // Audio

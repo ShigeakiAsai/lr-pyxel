@@ -273,8 +273,42 @@ pub unsafe extern "C" fn retro_init() {
         }
     }
 
+    // Force Python's UTF-8 mode (PEP 540). A normal `python3` CLI
+    // invocation auto-enables this when the environment has no usable
+    // locale (LANG/LC_ALL unset or "C", common on Lakka/embedded
+    // Linux), but this embedded interpreter doesn't reliably pick that
+    // up the same way — sys.stdout ended up defaulting to the 'ascii'
+    // codec, so `print("日本語")`-style output (or any implicit-encoding
+    // text I/O) raised UnicodeEncodeError. Must be set before
+    // prepare_freethreaded_python() so CPython's own startup sees it.
+    std::env::set_var("PYTHONUTF8", "1");
+
     // Start Python interpreter (after append_to_inittab)
     pyo3::prepare_freethreaded_python();
+
+    // The PYTHONUTF8 env var above didn't actually change sys.stdout's
+    // encoding for this embedded interpreter (confirmed: still failed
+    // with the same UnicodeEncodeError after adding it) — env-var-based
+    // UTF-8 mode apparently isn't fully honored via prepare_freethreaded_
+    // python()'s init path the way it would be for a normal `python3`
+    // process launched via execve(). Explicitly reconfiguring stdout/
+    // stderr after the interpreter starts is more direct and reliable:
+    // it doesn't depend on however CPython's config resolution handled
+    // (or didn't handle) the env var in this embedding context.
+    Python::with_gil(|py| {
+        if let Ok(sys) = py.import_bound("sys") {
+            for stream_name in ["stdout", "stderr"] {
+                if let Ok(stream) = sys.getattr(stream_name) {
+                    if stream.hasattr("reconfigure").unwrap_or(false) {
+                        let kwargs = pyo3::types::PyDict::new_bound(py);
+                        let _ = kwargs.set_item("encoding", "utf-8");
+                        let _ = kwargs.set_item("errors", "backslashreplace");
+                        let _ = stream.call_method("reconfigure", (), Some(&kwargs));
+                    }
+                }
+            }
+        }
+    });
 
     // Note (v0.10.0): math/random/struct used to be force-replaced with
     // hand-written pure-Python stubs here, because their compiled
@@ -722,6 +756,9 @@ pub unsafe extern "C" fn retro_load_game(game: *const c_void) -> bool {
                         .filter_map(|k| k.extract::<String>().ok())
                         .filter(|k| {
                             !k.starts_with('_')
+                                && k != "codecs"
+                                && !k.starts_with("codecs.")
+                                && !k.starts_with("encodings")
                                 && !matches!(k.as_str(),
                                     "sys" | "builtins" | "pyxel" | "os" | "os.path"
                                     | "io" | "abc" | "types" | "typing" | "functools"
@@ -785,6 +822,29 @@ pub unsafe extern "C" fn retro_load_game(game: *const c_void) -> bool {
         // Execute the game script
         let code    = std::fs::read_to_string(&script_path).unwrap_or_default();
         let globals = pyo3::types::PyDict::new_bound(py);
+        let _ = globals.set_item("__name__", "__main__");
+        // __file__ isn't set automatically since the script runs from a
+        // string (py.run_bound), not as a real file the interpreter
+        // launched — unlike a normal `python script.py` invocation.
+        // Games that use `os.path.dirname(__file__)` (a common pattern
+        // for locating their own assets) failed with
+        // `NameError: name '__file__' is not defined` without this.
+        let _ = globals.set_item("__file__", &script_path);
+        // Explicitly provide the real builtins module. Without this,
+        // CPython auto-inserts *something* for the top-level script
+        // executed via py.run_bound(), but modules subsequently imported
+        // normally (e.g. a sibling module doing `import other_module`,
+        // which itself calls open() at its own module level) ended up
+        // without a working `open` — TypeError: 'NoneType' object is
+        // not callable at the exact open()/io.open() call site.
+        // Reproduced with a minimal 3-file case: main.py imports a
+        // sibling module that imports another sibling module that
+        // calls open() during its own import — fails only in that
+        // nested-import scenario, not when open() is called directly
+        // from the top-level script itself.
+        if let Ok(builtins) = py.import_bound("builtins") {
+            let _ = globals.set_item("__builtins__", builtins);
+        }
 
         match py.run_bound(&code, Some(&globals), None) {
             Ok(_) => {
@@ -975,6 +1035,13 @@ unsafe fn launch_frontend() {
     Python::with_gil(|py| {
         let globals = pyo3::types::PyDict::new_bound(py);
         let _ = globals.set_item("__name__", "__main__");
+        // See the __builtins__ comment in load_game_from_path() — same
+        // fix applied here for consistency, in case frontend.py ever
+        // imports something that triggers the nested-import/open()
+        // pattern.
+        if let Ok(builtins) = py.import_bound("builtins") {
+            let _ = globals.set_item("__builtins__", builtins);
+        }
         match py.run_bound(FRONTEND_PY, Some(&globals), None) {
             Ok(_) => {
                 if PY_UPDATE.is_none() {
@@ -1074,6 +1141,9 @@ unsafe fn load_game_from_path(path: &str) {
                         .filter_map(|k| k.extract::<String>().ok())
                         .filter(|k| {
                             !k.starts_with('_')
+                                && k != "codecs"
+                                && !k.starts_with("codecs.")
+                                && !k.starts_with("encodings")
                                 && !matches!(k.as_str(),
                                     "sys" | "builtins" | "pyxel" | "os" | "os.path"
                                     | "io" | "abc" | "types" | "typing" | "functools"
@@ -1103,6 +1173,19 @@ unsafe fn load_game_from_path(path: &str) {
         if let Ok(code) = std::fs::read_to_string(&script_path) {
             let globals = pyo3::types::PyDict::new_bound(py);
             let _ = globals.set_item("__name__", "__main__");
+            // See the comment in retro_load_game()'s direct-load branch:
+            // __file__ isn't set automatically since the script runs
+            // from a string, not as a real file — games using
+            // os.path.dirname(__file__) need it set explicitly.
+            let _ = globals.set_item("__file__", &script_path);
+            // See the comment in retro_load_game()'s direct-load branch:
+            // without an explicit __builtins__, modules imported by the
+            // script (not the script itself) could end up with a broken
+            // `open`/`io.open` — TypeError: 'NoneType' object is not
+            // callable.
+            if let Ok(builtins) = py.import_bound("builtins") {
+                let _ = globals.set_item("__builtins__", builtins);
+            }
             match py.run_bound(&code, Some(&globals), None) {
                 Ok(_) => {
                     // pyxel.run() may have already set PY_UPDATE/PY_DRAW.
