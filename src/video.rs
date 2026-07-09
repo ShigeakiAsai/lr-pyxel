@@ -24,14 +24,16 @@ pub unsafe fn submit_pyxel_frame() {
     let screen_rc = screen();
 
     // src_w must be the ACTUAL physical canvas stride (how many pixels
-    // one row occupies in memory), not the per-game logical width now
-    // reported by pyxel_core::width(). The canvas itself is a fixed
-    // SCREEN_W x SCREEN_H buffer allocated once at boot and never
-    // resized — only pyxel_core::width()/height() are updated per game
-    // (so Python's pyxel.width/height report the right value). Using
-    // the logical width here previously desynced the row stride from
-    // the real memory layout, corrupting the image into diagonal/
-    // scanline garbage whenever GAME_W no longer equaled 512.
+    // one row occupies in memory). Since v0.11.x, the canvas is actually
+    // resized to match each game's requested dimensions via
+    // pyxel_core::pyxel().set_screen_size() (previously it stayed fixed
+    // at its boot size forever, with only the separate width()/height()
+    // globals updated per game — that mismatch corrupted the image into
+    // diagonal/scanline garbage whenever a game's width didn't equal the
+    // canvas's fixed physical size). Reading the canvas's own reported
+    // width here means this code doesn't need to know or care whether
+    // the canvas is fixed-size or resized per game — it's always correct
+    // either way.
     let src_w = (*screen_rc.get()).width() as usize;
     let dst_w = (GAME_W as usize).min(src_w);
     let dst_h = (GAME_H as usize).min(*height() as usize);

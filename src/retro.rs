@@ -84,8 +84,8 @@ pub unsafe extern "C" fn retro_get_system_av_info(info: *mut c_void) {
     let h = if GAME_H > 0 { GAME_H } else { SCREEN_H };
     (*info).geometry.base_width   = w;
     (*info).geometry.base_height  = h;
-    (*info).geometry.max_width    = 512;
-    (*info).geometry.max_height   = 512;
+    (*info).geometry.max_width    = 1024;
+    (*info).geometry.max_height   = 1024;
     (*info).geometry.aspect_ratio = w as f32 / h as f32;
     (*info).timing.fps            = f64::from(FPS);
     (*info).timing.sample_rate    = 22050.0;
@@ -637,8 +637,17 @@ pub unsafe extern "C" fn retro_load_game(game: *const c_void) -> bool {
         // Reset game dimensions to default for frontend
         GAME_W   = 128;
         GAME_H   = 128;
-        *pyxel_core::width()  = GAME_W;
-        *pyxel_core::height() = GAME_H;
+        // set_screen_size() both syncs width()/height() AND actually
+        // resizes the physical canvas to match (previously only the
+        // globals were synced, leaving the canvas fixed at its boot
+        // size regardless of the game's requested dimensions — this
+        // broke scripts using pyxel.screen.data_ptr() for direct pixel
+        // access, since they reasonably assume the buffer's memory
+        // stride equals pyxel.width, same as on desktop Pyxel where the
+        // canvas is always allocated to match exactly). Safe to call
+        // headless: internally gated behind `if !is_headless()` for the
+        // windowing-related side effects.
+        pyxel_core::pyxel().set_screen_size(GAME_W, GAME_H);
         GAME_FPS = 30;
         RETRO_FRAME_COUNT = 0;
         *pyxel_core::frame_count() = 0;
@@ -662,8 +671,8 @@ pub unsafe extern "C" fn retro_load_game(game: *const c_void) -> bool {
             let geometry = rust_libretro_sys::retro_game_geometry {
                 base_width:   128,
                 base_height:  128,
-                max_width:    512,
-                max_height:   512,
+                max_width:    1024,
+                max_height:   1024,
                 aspect_ratio: 1.0,
             };
             env(37, &geometry as *const _ as *mut c_void);
@@ -700,8 +709,7 @@ pub unsafe extern "C" fn retro_load_game(game: *const c_void) -> bool {
             eprintln!("[lr-pyxel] parsed init: w={w} h={h} fps={fps}");
             GAME_W   = w;
             GAME_H   = h;
-            *pyxel_core::width()  = w;
-            *pyxel_core::height() = h;
+            pyxel_core::pyxel().set_screen_size(w, h);
             GAME_FPS = fps;
         } else {
             eprintln!("[lr-pyxel] parse_pyxel_init: not found, using defaults");
@@ -723,8 +731,8 @@ pub unsafe extern "C" fn retro_load_game(game: *const c_void) -> bool {
         let geometry = rust_libretro_sys::retro_game_geometry {
             base_width:   GAME_W,
             base_height:  GAME_H,
-            max_width:    512,
-            max_height:   512,
+            max_width:    1024,
+            max_height:   1024,
             aspect_ratio: GAME_W as f32 / GAME_H as f32,
         };
         env(37, &geometry as *const _ as *mut c_void);
@@ -818,6 +826,11 @@ pub unsafe extern "C" fn retro_load_game(game: *const c_void) -> bool {
         // paths in the script (e.g. pyxel.load("assets/foo.pyxres")) resolve
         // correctly.
         let _ = std::env::set_current_dir(&game_dir);
+
+        // Set sys.argv to the ORIGINAL content path — see the matching
+        // comment in load_game_from_path() for why.
+        let argv = pyo3::types::PyList::new_bound(py, [&path]);
+        let _ = sys.setattr("argv", argv);
 
         // Execute the game script
         let code    = std::fs::read_to_string(&script_path).unwrap_or_default();
@@ -1003,8 +1016,7 @@ unsafe fn launch_frontend() {
     PY_DRAW   = None;
     GAME_W   = 128;
     GAME_H   = 128;
-    *pyxel_core::width()  = GAME_W;
-    *pyxel_core::height() = GAME_H;
+    pyxel_core::pyxel().set_screen_size(GAME_W, GAME_H);
     GAME_FPS = 30;
     RETRO_FRAME_COUNT = 0;
     *pyxel_core::frame_count() = 0;
@@ -1026,8 +1038,8 @@ unsafe fn launch_frontend() {
         let geometry = rust_libretro_sys::retro_game_geometry {
             base_width:   128,
             base_height:  128,
-            max_width:    512,
-            max_height:   512,
+            max_width:    1024,
+            max_height:   1024,
             aspect_ratio: 1.0,
         };
         env(37, &geometry as *const _ as *mut c_void);
@@ -1101,8 +1113,7 @@ unsafe fn load_game_from_path(path: &str) {
             eprintln!("[lr-pyxel] frontend launch: w={w} h={h} fps={fps}");
             GAME_W   = w;
             GAME_H   = h;
-            *pyxel_core::width()  = w;
-            *pyxel_core::height() = h;
+            pyxel_core::pyxel().set_screen_size(w, h);
             GAME_FPS = fps;
         }
     }
@@ -1112,8 +1123,8 @@ unsafe fn load_game_from_path(path: &str) {
         let geometry = rust_libretro_sys::retro_game_geometry {
             base_width:   GAME_W,
             base_height:  GAME_H,
-            max_width:    512,
-            max_height:   512,
+            max_width:    1024,
+            max_height:   1024,
             aspect_ratio: GAME_W as f32 / GAME_H as f32,
         };
         env(37, &geometry as *const _ as *mut c_void);
@@ -1169,6 +1180,19 @@ unsafe fn load_game_from_path(path: &str) {
                     let _ = std::env::set_current_dir(&game_dir);
                 }
             }
+
+            // Set sys.argv to the ORIGINAL content path (before any
+            // .pyxapp extraction), mimicking a normal `pyxel play
+            // some.pyxapp` invocation. The script now runs from an
+            // extracted temp copy with no other way to discover where
+            // the real .pyxapp lives — some exported games (e.g. ones
+            // that keep large assets in a sibling folder next to the
+            // .pyxapp rather than bundling them inside it, to avoid
+            // filling up /tmp) check sys.argv for the original
+            // invocation path to locate that sibling folder. Harmless
+            // for any script that doesn't look at sys.argv at all.
+            let argv = pyo3::types::PyList::new_bound(py, [path]);
+            let _ = sys.setattr("argv", argv);
         }
         if let Ok(code) = std::fs::read_to_string(&script_path) {
             let globals = pyo3::types::PyDict::new_bound(py);

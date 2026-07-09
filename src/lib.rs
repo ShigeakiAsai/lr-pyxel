@@ -61,8 +61,8 @@ static mut INPUT_STATE: Option<unsafe extern "C" fn(c_uint, c_uint, c_uint, c_ui
 static mut ENVIRON_CB:  Option<unsafe extern "C" fn(c_uint, *mut c_void) -> bool>             = None;
 
 // Screen dimensions
-const SCREEN_W: u32 = 512;
-const SCREEN_H: u32 = 512;
+const SCREEN_W: u32 = 1024;
+const SCREEN_H: u32 = 1024;
 const FPS: u32      = 60;
 
 // Game-requested FPS (set by pyxel.init(), default 30)

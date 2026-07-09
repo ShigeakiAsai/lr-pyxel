@@ -524,7 +524,21 @@ pub fn btnp(key: u32, hold: Option<u32>, repeat: Option<u32>) -> bool {
 // -- system ------------------------------------------------------------------
 
 
-// init() is a no-op: Pyxel is already initialized by retro_init()
+// init() previously only updated GAME_W/GAME_H bookkeeping, the
+// Python-visible pyxel.width/height module attributes, and notified
+// RetroArch via SET_GEOMETRY — but never actually resized the physical
+// canvas (missing the pyxel_core::pyxel().set_screen_size() call). This
+// meant the game's REAL init() call (with its actual runtime-computed
+// w/h — which may differ from parse_pyxel_init()'s static pre-parse
+// guess, e.g. when the real value depends on a conditional expression
+// or other logic the static parser can't evaluate) correctly told
+// RetroArch "expect WxH", but the underlying video stream stayed
+// capped at whatever size the pre-parse guessed, silently truncating
+// anything beyond that. Found via finardry.pyxapp:
+// `height = 256 if MODE_SQUARE else 240; px.init(256, height, ...)` —
+// the static parser can't evaluate the conditional, falls back to the
+// default 128, and the real init() call's correct height (240) was
+// never propagated to the actual canvas.
 #[pyfunction]
 #[pyo3(signature = (w, h, title=None, fps=None, quit_key=None,
                     display_scale=None, capture_scale=None,
@@ -541,6 +555,14 @@ pub fn init(
         GAME_H = h.max(1);
         GAME_FPS = fps.unwrap_or(30).clamp(1, 60);
 
+        // Actually resize the physical canvas to match — this is the
+        // authoritative source of truth (the script's real runtime
+        // values), superseding whatever the pre-execution static parse
+        // guessed. Also updates pyxel_core::width()/height().
+        if PYXEL_READY {
+            pyxel_core::pyxel().set_screen_size(GAME_W, GAME_H);
+        }
+
         // Update pyxel.width/height module attributes to reflect game size
         Python::with_gil(|py| {
             if let Ok(m) = py.import_bound("pyxel") {
@@ -554,11 +576,11 @@ pub fn init(
         // after init without restarting the core.
         if let Some(env) = ENVIRON_CB {
             let geometry = rust_libretro_sys::retro_game_geometry {
-                base_width:   w,
-                base_height:  h,
-                max_width:    256,
-                max_height:   256,
-                aspect_ratio: w as f32 / h as f32,
+                base_width:   GAME_W,
+                base_height:  GAME_H,
+                max_width:    1024,
+                max_height:   1024,
+                aspect_ratio: GAME_W as f32 / GAME_H as f32,
             };
             env(37, &geometry as *const _ as *mut c_void);
         }
