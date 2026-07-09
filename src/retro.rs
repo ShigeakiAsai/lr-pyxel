@@ -652,8 +652,8 @@ pub unsafe extern "C" fn retro_load_game(game: *const c_void) -> bool {
         RETRO_FRAME_COUNT = 0;
         *pyxel_core::frame_count() = 0;
         LR_FRAME_COUNT    = 0;
-        audio::PREV_BUTTONS = 0;
-        audio::reset_all_button_states();
+        input::PREV_BUTTONS = 0;
+        input::reset_all_button_states();
         reset_color_palette();
         // Stop audio from previous content
         if PYXEL_READY {
@@ -747,8 +747,8 @@ pub unsafe extern "C" fn retro_load_game(game: *const c_void) -> bool {
         RETRO_FRAME_COUNT = 0;
         *pyxel_core::frame_count() = 0;
         LR_FRAME_COUNT    = 0;
-        audio::PREV_BUTTONS = 0;
-        audio::reset_all_button_states();
+        input::PREV_BUTTONS = 0;
+        input::reset_all_button_states();
         reset_color_palette();
 
         // Clear cached modules from previous game to prevent import conflicts.
@@ -975,9 +975,9 @@ pub unsafe extern "C" fn retro_run() {
     }
 
     // Always inject input every frame
-    audio::inject_input(buttons);
+    input::inject_input(buttons);
     if let Some(state) = INPUT_STATE {
-        audio::inject_mouse_input(state);
+        input::inject_mouse_input(state);
     }
 
     // Check if frontend requested a content load
@@ -1024,8 +1024,8 @@ unsafe fn launch_frontend() {
     RETRO_FRAME_COUNT = 0;
     *pyxel_core::frame_count() = 0;
     LR_FRAME_COUNT    = 0;
-    audio::PREV_BUTTONS = 0;
-    audio::reset_all_button_states();
+    input::PREV_BUTTONS = 0;
+    input::reset_all_button_states();
     reset_color_palette();
     if PYXEL_READY {
         pyxel_core::pyxel().stop_all_channels();
@@ -1082,8 +1082,8 @@ unsafe fn load_game_from_path(path: &str) {
     RETRO_FRAME_COUNT = 0;
     *pyxel_core::frame_count() = 0;
     LR_FRAME_COUNT    = 0;
-    audio::PREV_BUTTONS = 0;
-    audio::reset_all_button_states();
+    input::PREV_BUTTONS = 0;
+    input::reset_all_button_states();
     reset_color_palette();
     // Note: SPLASH_COUNT is NOT reset here; splash only shows on core-less boot
 

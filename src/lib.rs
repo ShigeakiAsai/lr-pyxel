@@ -3,6 +3,7 @@
 
 mod video;
 mod audio;
+mod input;
 mod retro;
 mod wrappers;
 mod splash;
