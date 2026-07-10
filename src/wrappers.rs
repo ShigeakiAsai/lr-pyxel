@@ -1586,6 +1586,15 @@ impl PySound {
 
 #[pymethods]
 impl PySound {
+    // Missing entirely until now — pyxel.Sound() is a documented
+    // upstream constructor for a standalone sound, not just a
+    // bank-indexed pyxel.sounds[i]. Made possible by the Bank/Owned
+    // enum split already added in v0.14.0's Seq protocol work.
+    #[new]
+    pub fn new() -> Self {
+        PySound { sound_ref: SoundRef::Owned(pyxel_core::Sound::new()) }
+    }
+
     #[getter]
     pub fn notes(&self) -> Vec<pyxel_core::SoundNote> {
         unsafe { (&*self.rc().get()).notes.clone() }
@@ -2841,6 +2850,12 @@ impl PyMusic {
 
 #[pymethods]
 impl PyMusic {
+    // Same reasoning as PySound::new() above.
+    #[new]
+    pub fn new() -> Self {
+        PyMusic { music_ref: MusicRef::Owned(pyxel_core::Music::new()) }
+    }
+
     #[getter]
     pub fn seqs(&self) -> Vec<Vec<u32>> {
         unsafe { (&*self.rc().get()).seqs.clone() }
@@ -2996,6 +3011,13 @@ pub fn __getattr__(py: Python, name: &str) -> PyResult<Py<PyAny>> {
         // Graphics
         "colors"   => PyColors.into_py(py),
         "screen"   => PyImage { image: pyxel_core::screen().clone() }.into_py(py),
+        // Missing entirely until now (pyxel.screen was added in
+        // v0.11.2, but these two built-in image banks were
+        // overlooked) — the mouse cursor sprite and the built-in
+        // font glyph atlas, both exposed upstream as plain Image
+        // instances alongside pyxel.screen.
+        "cursor"   => PyImage { image: pyxel_core::cursor_image().clone() }.into_py(py),
+        "font"     => PyImage { image: pyxel_core::font_image().clone() }.into_py(py),
         "images"   => PyImageList.into_py(py),
         "tilemaps" => PyTilemapList.into_py(py),
         // Audio
