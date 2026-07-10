@@ -498,6 +498,19 @@ pub fn sound_set(
 pub fn play(ch: u32, snd: pyo3::Bound<'_, pyo3::PyAny>, sec: Option<f32>, r#loop: Option<bool>, resume: Option<bool>, tick: Option<f32>) -> PyResult<()> {
     unsafe {
         if !PYXEL_READY { return Ok(()); }
+        // Bounds-check the channel index before any pyxel_core call —
+        // every branch below indexes pyxel_core::channels()[ch] (some
+        // directly here, some inside pyxel_core itself) with no
+        // bounds-checking of its own, so an out-of-range ch previously
+        // caused a raw Rust panic instead of a catchable Python
+        // exception — and a panic inside PyO3-called Rust code aborts
+        // the whole process (RetroArch included), not just the script.
+        // Found via test_play_invalid_channel (pyxel.play(999, 0)),
+        // which crashed RetroArch entirely rather than raising
+        // cleanly.
+        if ch as usize >= pyxel_core::channels().len() {
+            return Err(pyo3::exceptions::PyValueError::new_err("Invalid channel index"));
+        }
         let should_loop   = r#loop.unwrap_or(false);
         let should_resume = resume.unwrap_or(false);
         if tick.is_some() {
@@ -505,8 +518,14 @@ pub fn play(ch: u32, snd: pyo3::Bound<'_, pyo3::PyAny>, sec: Option<f32>, r#loop
         }
         let sec = tick.map(|t| t / 120.0).or(sec);
         if let Ok(idx) = snd.extract::<u32>() {
+            if idx as usize >= pyxel_core::sounds().len() {
+                return Err(pyo3::exceptions::PyValueError::new_err("Invalid sound index"));
+            }
             pyxel_core::pyxel().play_sound(ch, idx, sec, should_loop, should_resume);
         } else if let Ok(seq) = snd.extract::<Vec<u32>>() {
+            if seq.iter().any(|&i| i as usize >= pyxel_core::sounds().len()) {
+                return Err(pyo3::exceptions::PyValueError::new_err("Invalid sound index"));
+            }
             pyxel_core::pyxel().play(ch, &seq, sec, should_loop, should_resume);
         } else if let Ok(mml) = snd.extract::<String>() {
             let _lock = pyxel_core::AudioLock::lock();
@@ -536,29 +555,38 @@ pub fn play(ch: u32, snd: pyo3::Bound<'_, pyo3::PyAny>, sec: Option<f32>, r#loop
 // sec); if both sec and tick are given, tick takes precedence.
 #[pyfunction]
 #[pyo3(signature = (msc, sec=None, r#loop=None, tick=None))]
-pub fn playm(msc: u32, sec: Option<f32>, r#loop: Option<bool>, tick: Option<f32>) {
+pub fn playm(msc: u32, sec: Option<f32>, r#loop: Option<bool>, tick: Option<f32>) -> PyResult<()> {
     unsafe {
-        if PYXEL_READY {
-            if tick.is_some() {
-                warn_deprecated_once("playm.tick", "playm()'s tick argument (use sec instead)");
-            }
-            let sec = tick.map(|t| t / 120.0).or(sec);
-            pyxel_core::pyxel().play_music(msc, sec, r#loop.unwrap_or(false));
+        if !PYXEL_READY { return Ok(()); }
+        if msc as usize >= pyxel_core::musics().len() {
+            return Err(pyo3::exceptions::PyValueError::new_err("Invalid music index"));
         }
+        if tick.is_some() {
+            warn_deprecated_once("playm.tick", "playm()'s tick argument (use sec instead)");
+        }
+        let sec = tick.map(|t| t / 120.0).or(sec);
+        pyxel_core::pyxel().play_music(msc, sec, r#loop.unwrap_or(false));
     }
+    Ok(())
 }
 
 // stop(ch=None)
 #[pyfunction]
 #[pyo3(signature = (ch=None))]
-pub fn stop(ch: Option<u32>) {
+pub fn stop(ch: Option<u32>) -> PyResult<()> {
     unsafe {
-        if !PYXEL_READY { return; }
+        if !PYXEL_READY { return Ok(()); }
         match ch {
-            Some(c) => pyxel_core::pyxel().stop_channel(c),
-            None    => pyxel_core::pyxel().stop_all_channels(),
+            Some(c) => {
+                if c as usize >= pyxel_core::channels().len() {
+                    return Err(pyo3::exceptions::PyValueError::new_err("Invalid channel index"));
+                }
+                pyxel_core::pyxel().stop_channel(c);
+            }
+            None => pyxel_core::pyxel().stop_all_channels(),
         }
     }
+    Ok(())
 }
 
 // gen_bgm(preset, transp, instr, seed, play=None)
@@ -577,10 +605,13 @@ pub fn gen_bgm(preset: i32, transp: i32, instr: i32, seed: u64, play: Option<boo
 
 // play_pos(ch)
 #[pyfunction]
-pub fn play_pos(ch: u32) -> Option<(u32, f32)> {
+pub fn play_pos(ch: u32) -> PyResult<Option<(u32, f32)>> {
     unsafe {
-        if !PYXEL_READY { return None; }
-        pyxel_core::pyxel().play_position(ch)
+        if !PYXEL_READY { return Ok(None); }
+        if ch as usize >= pyxel_core::channels().len() {
+            return Err(pyo3::exceptions::PyValueError::new_err("Invalid channel index"));
+        }
+        Ok(pyxel_core::pyxel().play_position(ch))
     }
 }
 
@@ -1001,36 +1032,52 @@ pub fn fill(x: f32, y: f32, color: u8) {
 }
 #[pyfunction]
 #[pyo3(signature = (x=None, y=None, w=None, h=None))]
-pub fn clip(x: Option<f32>, y: Option<f32>, w: Option<f32>, h: Option<f32>) {
+pub fn clip(x: Option<f32>, y: Option<f32>, w: Option<f32>, h: Option<f32>) -> PyResult<()> {
     unsafe {
-        if !PYXEL_READY { return; }
+        if !PYXEL_READY { return Ok(()); }
         match (x, y, w, h) {
             (Some(x), Some(y), Some(w), Some(h)) => pyxel_core::pyxel().set_clip_rect(x, y, w, h),
-            _ => pyxel_core::pyxel().reset_clip_rect(),
+            (None, None, None, None) => pyxel_core::pyxel().reset_clip_rect(),
+            // Silently resetting on a partial argument set (e.g.
+            // clip(10, 20), forgetting w/h) previously masked what was
+            // almost certainly a script typo — now raises the same
+            // way upstream does.
+            _ => return Err(pyo3::exceptions::PyTypeError::new_err(
+                "clip() takes 0 or 4 arguments"
+            )),
         }
     }
+    Ok(())
 }
 #[pyfunction]
 #[pyo3(signature = (x=None, y=None))]
-pub fn camera(x: Option<f32>, y: Option<f32>) {
+pub fn camera(x: Option<f32>, y: Option<f32>) -> PyResult<()> {
     unsafe {
-        if !PYXEL_READY { return; }
+        if !PYXEL_READY { return Ok(()); }
         match (x, y) {
             (Some(x), Some(y)) => pyxel_core::pyxel().set_camera(x, y),
-            _ => pyxel_core::pyxel().reset_camera(),
+            (None, None) => pyxel_core::pyxel().reset_camera(),
+            _ => return Err(pyo3::exceptions::PyTypeError::new_err(
+                "camera() takes 0 or 2 arguments"
+            )),
         }
     }
+    Ok(())
 }
 #[pyfunction]
 #[pyo3(signature = (col1=None, col2=None))]
-pub fn pal(col1: Option<u8>, col2: Option<u8>) {
+pub fn pal(col1: Option<u8>, col2: Option<u8>) -> PyResult<()> {
     unsafe {
-        if !PYXEL_READY { return; }
+        if !PYXEL_READY { return Ok(()); }
         match (col1, col2) {
             (Some(c1), Some(c2)) => pyxel_core::pyxel().map_color(c1, c2),
-            _ => pyxel_core::pyxel().reset_color_map(),
+            (None, None) => pyxel_core::pyxel().reset_color_map(),
+            _ => return Err(pyo3::exceptions::PyTypeError::new_err(
+                "pal() takes 0 or 2 arguments"
+            )),
         }
     }
+    Ok(())
 }
 #[pyfunction]
 pub fn dither(alpha: f32) {
@@ -1496,6 +1543,54 @@ impl PyImage {
             };
             let dst = &mut *self.rc().get();
             dst.draw_tilemap(x, y, &src, u, v, w, h, colkey, rotate, scale);
+        }
+        Ok(())
+    }
+
+    // Missing entirely until now — only the top-level pyxel.blt3d()
+    // (which always draws to the screen) existed. Image.blt3d() draws
+    // into the calling Image instance itself, confirmed via upstream's
+    // own test (draws into a standalone Image, not pyxel.screen).
+    #[pyo3(signature = (x, y, w, h, img, pos, rot, fov=None, colkey=None))]
+    #[allow(clippy::too_many_arguments)]
+    pub fn blt3d(&self, x: f32, y: f32, w: f32, h: f32, img: pyo3::Bound<'_, pyo3::PyAny>,
+             pos: (f32, f32, f32), rot: (f32, f32, f32), fov: Option<f32>, colkey: Option<u8>) -> PyResult<()> {
+        unsafe {
+            let src = if let Ok(idx) = img.extract::<u32>() {
+                pyxel_core::images().get(idx as usize)
+                    .cloned()
+                    .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("Invalid image index"))?
+            } else if let Ok(pyimg) = img.extract::<pyo3::PyRef<PyImage>>() {
+                pyimg.rc().clone()
+            } else {
+                return Err(pyo3::exceptions::PyTypeError::new_err(
+                    "img must be an image bank index (int) or an Image instance"
+                ));
+            };
+            let dst = &mut *self.rc().get();
+            dst.draw_image_3d(x, y, w, h, &src, pos, rot, fov, colkey);
+        }
+        Ok(())
+    }
+
+    #[pyo3(signature = (x, y, w, h, tm, pos, rot, fov=None, colkey=None))]
+    #[allow(clippy::too_many_arguments)]
+    pub fn bltm3d(&self, x: f32, y: f32, w: f32, h: f32, tm: pyo3::Bound<'_, pyo3::PyAny>,
+              pos: (f32, f32, f32), rot: (f32, f32, f32), fov: Option<f32>, colkey: Option<u8>) -> PyResult<()> {
+        unsafe {
+            let src = if let Ok(idx) = tm.extract::<u32>() {
+                pyxel_core::tilemaps().get(idx as usize)
+                    .cloned()
+                    .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("Invalid tilemap index"))?
+            } else if let Ok(pytm) = tm.extract::<pyo3::PyRef<PyTilemap>>() {
+                pytm.rc().clone()
+            } else {
+                return Err(pyo3::exceptions::PyTypeError::new_err(
+                    "tm must be a tilemap bank index (int) or a Tilemap instance"
+                ));
+            };
+            let dst = &mut *self.rc().get();
+            dst.draw_tilemap_3d(x, y, w, h, &src, pos, rot, fov, colkey);
         }
         Ok(())
     }
@@ -2513,7 +2608,30 @@ impl PyColors {
     }
 
     pub fn __repr__(&self) -> String {
-        format!("{:?}", pyxel_core::colors())
+        format!("Colors{:?}", pyxel_core::colors())
+    }
+
+    pub fn __eq__(&self, other: pyo3::Bound<'_, pyo3::PyAny>) -> bool {
+        if let Ok(other_vec) = other.extract::<Vec<u32>>() {
+            *pyxel_core::colors() == other_vec
+        } else {
+            false
+        }
+    }
+
+    pub fn __add__(&self, other: Vec<u32>) -> Vec<u32> {
+        let mut result = pyxel_core::colors().clone();
+        result.extend(other);
+        result
+    }
+
+    pub fn __mul__(&self, n: usize) -> Vec<u32> {
+        let colors = pyxel_core::colors();
+        let mut result = Vec::with_capacity(colors.len() * n);
+        for _ in 0..n {
+            result.extend(colors.iter().copied());
+        }
+        result
     }
 
     pub fn __bool__(&self) -> bool {
