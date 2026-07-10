@@ -22,7 +22,24 @@ fn warn_deprecated_once(key: &'static str, message: &str) {
         let ptr = std::ptr::addr_of_mut!(WARNED_DEPRECATIONS);
         let set = (*ptr).get_or_insert_with(std::collections::HashSet::new);
         if set.insert(key) {
-            println!("Warning: {message} is deprecated");
+            // Route through Python's own print() (writing to sys.stdout)
+            // rather than Rust's println! (which writes directly to the
+            // OS-level stdout file descriptor, bypassing Python's stdio
+            // layer entirely). Found via a test harness built to run
+            // upstream Pyxel's own pytest suite inside lr-pyxel: a
+            // Python-level capfd-style stdout redirection
+            // (contextlib.redirect_stdout) never saw these warnings at
+            // all, even though they showed up fine in journalctl (which
+            // captures the raw process stdout) — println!'s output
+            // never passed through sys.stdout for Python-level
+            // redirection to intercept in the first place.
+            pyo3::Python::with_gil(|py| {
+                if let Ok(builtins) = py.import_bound("builtins") {
+                    if let Ok(print_fn) = builtins.getattr("print") {
+                        let _ = print_fn.call1((format!("Warning: {message} is deprecated"),));
+                    }
+                }
+            });
         }
     }
 }
@@ -1736,7 +1753,34 @@ impl PySound {
             let snd = &mut *self.rc().get();
             match code {
                 None => { snd.clear_mml(); Ok(()) }
-                Some(c) => snd.set_mml(c).map_err(pyo3::exceptions::PyException::new_err)
+                Some(c) => {
+                    match snd.set_mml(c) {
+                        Ok(()) => Ok(()),
+                        Err(new_err) => {
+                            // The old MML dialect (predates the current
+                            // mml() grammar) uses syntax the new parser
+                            // rejects (e.g. a bare 'x'/'X' token) — fall
+                            // back to the legacy parser instead of
+                            // raising, with a deprecation warning, for
+                            // backward compatibility with scripts
+                            // written against the old dialect. Uses its
+                            // own key, separate from calling old_mml()
+                            // directly — upstream tests each as its own
+                            // independent "first time this session"
+                            // warning.
+                            match snd.old_mml(c) {
+                                Ok(()) => {
+                                    warn_deprecated_once(
+                                        "Sound.mml.old_syntax",
+                                        "the old MML syntax (use the current mml() syntax instead)"
+                                    );
+                                    Ok(())
+                                }
+                                Err(_) => Err(pyo3::exceptions::PyException::new_err(new_err)),
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -1968,29 +2012,52 @@ impl PyTilemap {
         Ok(())
     }
 
-    // Deprecated: refimg (alias for imgsrc)
+    // Deprecated: refimg (alias for imgsrc, raw pass-through — returns
+    // whatever form imgsrc itself would: an int if set as an index, or
+    // an Image if set as an instance). getter/setter use distinct keys,
+    // same reasoning as Tone.waveform/noise above.
     #[getter]
     pub fn refimg(&self, py: pyo3::Python) -> pyo3::PyObject {
-        warn_deprecated_once("Tilemap.refimg", "Tilemap.refimg (use Tilemap.imgsrc instead)");
+        warn_deprecated_once("Tilemap.refimg.get", "Tilemap.refimg (use Tilemap.imgsrc instead)");
         self.imgsrc(py)
     }
 
     #[setter]
     pub fn set_refimg(&self, img: pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<()> {
-        warn_deprecated_once("Tilemap.refimg", "Tilemap.refimg (use Tilemap.imgsrc instead)");
+        warn_deprecated_once("Tilemap.refimg.set", "Tilemap.refimg (use Tilemap.imgsrc instead)");
         self.set_imgsrc(img)
     }
 
-    // Deprecated: image (also an alias for imgsrc)
+    // Deprecated: image. Unlike refimg, this ALWAYS resolves to a real
+    // Image instance even if the tilemap's imgsrc was set as a plain
+    // bank index — image's original (pre-imgsrc) semantics were always
+    // "the actual Image content", never a raw index. Confirmed via
+    // upstream's own test (constructs Tilemap(8, 8, 0) — an int index —
+    // then asserts isinstance(tm.image, pyxel.Image)).
     #[getter]
     pub fn image(&self, py: pyo3::Python) -> pyo3::PyObject {
-        warn_deprecated_once("Tilemap.image", "Tilemap.image (use Tilemap.imgsrc instead)");
-        self.imgsrc(py)
+        use pyo3::IntoPy;
+        warn_deprecated_once("Tilemap.image.get", "Tilemap.image (use Tilemap.imgsrc instead)");
+        unsafe {
+            match &(&*self.rc().get()).imgsrc {
+                pyxel_core::ImageSource::Index(i) => {
+                    let rc = pyxel_core::images()[*i as usize].clone();
+                    pyo3::Py::new(py, PyImage { image: rc })
+                        .map(|obj| obj.into_py(py))
+                        .unwrap_or_else(|_| py.None())
+                }
+                pyxel_core::ImageSource::Image(rc) => {
+                    pyo3::Py::new(py, PyImage { image: rc.clone() })
+                        .map(|obj| obj.into_py(py))
+                        .unwrap_or_else(|_| py.None())
+                }
+            }
+        }
     }
 
     #[setter]
     pub fn set_image(&self, img: pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<()> {
-        warn_deprecated_once("Tilemap.image", "Tilemap.image (use Tilemap.imgsrc instead)");
+        warn_deprecated_once("Tilemap.image.set", "Tilemap.image (use Tilemap.imgsrc instead)");
         self.set_imgsrc(img)
     }
 
@@ -2755,29 +2822,34 @@ impl PyTone {
         unsafe { (&mut *self.rc().get()).wavetable = wavetable; }
     }
 
-    // Deprecated: waveform (alias for wavetable)
+    // Deprecated: waveform (alias for wavetable). getter/setter use
+    // distinct keys — upstream tests each as an independently "first
+    // time this session" warning, in separate test functions, so a
+    // single shared key (where whichever ran first consumed the only
+    // warning) made the second one silently stop firing.
     #[getter]
     pub fn waveform(&self) -> Vec<pyxel_core::ToneSample> {
-        warn_deprecated_once("Tone.waveform", "Tone.waveform (use Tone.wavetable instead)");
+        warn_deprecated_once("Tone.waveform.get", "Tone.waveform (use Tone.wavetable instead)");
         self.wavetable()
     }
 
     #[setter]
     pub fn set_waveform(&self, waveform: Vec<pyxel_core::ToneSample>) {
-        warn_deprecated_once("Tone.waveform", "Tone.waveform (use Tone.wavetable instead)");
+        warn_deprecated_once("Tone.waveform.set", "Tone.waveform (use Tone.wavetable instead)");
         self.set_wavetable(waveform);
     }
 
-    // Deprecated: noise (alias for mode)
+    // Deprecated: noise (alias for mode). Same getter/setter key split
+    // as waveform above.
     #[getter]
     pub fn noise(&self) -> u32 {
-        warn_deprecated_once("Tone.noise", "Tone.noise (use Tone.mode instead)");
+        warn_deprecated_once("Tone.noise.get", "Tone.noise (use Tone.mode instead)");
         self.mode()
     }
 
     #[setter]
     pub fn set_noise(&self, mode: u32) {
-        warn_deprecated_once("Tone.noise", "Tone.noise (use Tone.mode instead)");
+        warn_deprecated_once("Tone.noise.set", "Tone.noise (use Tone.mode instead)");
         self.set_mode(mode);
     }
 }
