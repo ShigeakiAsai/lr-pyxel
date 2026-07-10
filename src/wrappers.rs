@@ -250,6 +250,15 @@ pub fn blt(x: f32, y: f32, img: pyo3::Bound<'_, pyo3::PyAny>, u: f32, v: f32, w:
             let screen = pyxel_core::screen();
             let dst = &mut *screen.get();
             dst.draw_image(x, y, &src, u, v, w, h, colkey, rotate, scale);
+        } else {
+            // Previously fell through silently here (no else branch at
+            // all) — an invalid img argument no-op'd instead of raising,
+            // found via upstream's own test (pyxel.blt(0, 0,
+            // "not_an_image", ...) expected a TypeError but nothing was
+            // raised at all).
+            return Err(pyo3::exceptions::PyTypeError::new_err(
+                "img must be u32, Image"
+            ));
         }
     }
     Ok(())
@@ -678,7 +687,7 @@ pub fn play(ch: u32, snd: pyo3::Bound<'_, pyo3::PyAny>, sec: Option<f32>, r#loop
             channel.play(sounds, sec, should_loop, should_resume);
         } else {
             return Err(pyo3::exceptions::PyTypeError::new_err(
-                "snd must be an int, list of ints, Sound, list of Sounds, or MML string"
+                "snd must be u32, Vec<u32>, Sound, list of Sound, or MML str"
             ));
         }
         Ok(())
@@ -1052,6 +1061,219 @@ pub fn add_module_constants(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("GAMEPAD2_BUTTON_DPAD_DOWN",     pyxel_core::GAMEPAD2_BUTTON_DPAD_DOWN)?;
     m.add("GAMEPAD2_BUTTON_DPAD_LEFT",     pyxel_core::GAMEPAD2_BUTTON_DPAD_LEFT)?;
     m.add("GAMEPAD2_BUTTON_DPAD_RIGHT",    pyxel_core::GAMEPAD2_BUTTON_DPAD_RIGHT)?;
+
+    // Settings/system constants — same situation as the KEY_/GAMEPAD_
+    // batch above: defined in pyxel_core (settings.rs) but never
+    // exposed to Python until now.
+    m.add("VERSION", pyxel_core::VERSION)?;
+    m.add("BASE_DIR", pyxel_core::BASE_DIR)?;
+    m.add("WINDOW_STATE_ENV", pyxel_core::WINDOW_STATE_ENV)?;
+    m.add("WATCH_STATE_FILE_ENV", pyxel_core::WATCH_STATE_FILE_ENV)?;
+    m.add("WATCH_RESET_EXIT_CODE", pyxel_core::WATCH_RESET_EXIT_CODE)?;
+    m.add("APP_STARTUP_SCRIPT_FILE", pyxel_core::APP_STARTUP_SCRIPT_FILE)?;
+    m.add("DEFAULT_COLORS", pyxel_core::DEFAULT_COLORS.to_vec())?;
+    m.add("APP_FILE_EXTENSION", pyxel_core::APP_FILE_EXTENSION)?;
+    m.add("RESOURCE_FILE_EXTENSION", pyxel_core::RESOURCE_FILE_EXTENSION)?;
+    m.add("PALETTE_FILE_EXTENSION", pyxel_core::PALETTE_FILE_EXTENSION)?;
+
+    // Newly registered: previously defined in pyxel_core's key.rs but
+    // never exposed to Python. Found via upstream's own exhaustive
+    // constant tests (test_all_key_constants_are_int,
+    // test_all_gamepad_constants_are_int, etc.), which loop over every
+    // expected name and stop at the first missing one — meaning only
+    // ONE gap surfaced per test run until each was fixed and the test
+    // re-run, so this batch was compiled by diffing key.rs's full
+    // constant list against what was already registered, rather than
+    // fixing them one at a time.
+    m.add("GAMEPAD2_AXIS_LEFTX", pyxel_core::GAMEPAD2_AXIS_LEFTX)?;
+    m.add("GAMEPAD2_AXIS_LEFTY", pyxel_core::GAMEPAD2_AXIS_LEFTY)?;
+    m.add("GAMEPAD2_AXIS_RIGHTX", pyxel_core::GAMEPAD2_AXIS_RIGHTX)?;
+    m.add("GAMEPAD2_AXIS_RIGHTY", pyxel_core::GAMEPAD2_AXIS_RIGHTY)?;
+    m.add("GAMEPAD2_AXIS_TRIGGERLEFT", pyxel_core::GAMEPAD2_AXIS_TRIGGERLEFT)?;
+    m.add("GAMEPAD2_AXIS_TRIGGERRIGHT", pyxel_core::GAMEPAD2_AXIS_TRIGGERRIGHT)?;
+    m.add("GAMEPAD2_BUTTON_LEFTSTICK", pyxel_core::GAMEPAD2_BUTTON_LEFTSTICK)?;
+    m.add("GAMEPAD2_BUTTON_RIGHTSTICK", pyxel_core::GAMEPAD2_BUTTON_RIGHTSTICK)?;
+    m.add("GAMEPAD3_AXIS_LEFTX", pyxel_core::GAMEPAD3_AXIS_LEFTX)?;
+    m.add("GAMEPAD3_AXIS_LEFTY", pyxel_core::GAMEPAD3_AXIS_LEFTY)?;
+    m.add("GAMEPAD3_AXIS_RIGHTX", pyxel_core::GAMEPAD3_AXIS_RIGHTX)?;
+    m.add("GAMEPAD3_AXIS_RIGHTY", pyxel_core::GAMEPAD3_AXIS_RIGHTY)?;
+    m.add("GAMEPAD3_AXIS_TRIGGERLEFT", pyxel_core::GAMEPAD3_AXIS_TRIGGERLEFT)?;
+    m.add("GAMEPAD3_AXIS_TRIGGERRIGHT", pyxel_core::GAMEPAD3_AXIS_TRIGGERRIGHT)?;
+    m.add("GAMEPAD3_BUTTON_A", pyxel_core::GAMEPAD3_BUTTON_A)?;
+    m.add("GAMEPAD3_BUTTON_B", pyxel_core::GAMEPAD3_BUTTON_B)?;
+    m.add("GAMEPAD3_BUTTON_BACK", pyxel_core::GAMEPAD3_BUTTON_BACK)?;
+    m.add("GAMEPAD3_BUTTON_DPAD_DOWN", pyxel_core::GAMEPAD3_BUTTON_DPAD_DOWN)?;
+    m.add("GAMEPAD3_BUTTON_DPAD_LEFT", pyxel_core::GAMEPAD3_BUTTON_DPAD_LEFT)?;
+    m.add("GAMEPAD3_BUTTON_DPAD_RIGHT", pyxel_core::GAMEPAD3_BUTTON_DPAD_RIGHT)?;
+    m.add("GAMEPAD3_BUTTON_DPAD_UP", pyxel_core::GAMEPAD3_BUTTON_DPAD_UP)?;
+    m.add("GAMEPAD3_BUTTON_GUIDE", pyxel_core::GAMEPAD3_BUTTON_GUIDE)?;
+    m.add("GAMEPAD3_BUTTON_LEFTSHOULDER", pyxel_core::GAMEPAD3_BUTTON_LEFTSHOULDER)?;
+    m.add("GAMEPAD3_BUTTON_LEFTSTICK", pyxel_core::GAMEPAD3_BUTTON_LEFTSTICK)?;
+    m.add("GAMEPAD3_BUTTON_RIGHTSHOULDER", pyxel_core::GAMEPAD3_BUTTON_RIGHTSHOULDER)?;
+    m.add("GAMEPAD3_BUTTON_RIGHTSTICK", pyxel_core::GAMEPAD3_BUTTON_RIGHTSTICK)?;
+    m.add("GAMEPAD3_BUTTON_START", pyxel_core::GAMEPAD3_BUTTON_START)?;
+    m.add("GAMEPAD3_BUTTON_X", pyxel_core::GAMEPAD3_BUTTON_X)?;
+    m.add("GAMEPAD3_BUTTON_Y", pyxel_core::GAMEPAD3_BUTTON_Y)?;
+    m.add("GAMEPAD4_AXIS_LEFTX", pyxel_core::GAMEPAD4_AXIS_LEFTX)?;
+    m.add("GAMEPAD4_AXIS_LEFTY", pyxel_core::GAMEPAD4_AXIS_LEFTY)?;
+    m.add("GAMEPAD4_AXIS_RIGHTX", pyxel_core::GAMEPAD4_AXIS_RIGHTX)?;
+    m.add("GAMEPAD4_AXIS_RIGHTY", pyxel_core::GAMEPAD4_AXIS_RIGHTY)?;
+    m.add("GAMEPAD4_AXIS_TRIGGERLEFT", pyxel_core::GAMEPAD4_AXIS_TRIGGERLEFT)?;
+    m.add("GAMEPAD4_AXIS_TRIGGERRIGHT", pyxel_core::GAMEPAD4_AXIS_TRIGGERRIGHT)?;
+    m.add("GAMEPAD4_BUTTON_A", pyxel_core::GAMEPAD4_BUTTON_A)?;
+    m.add("GAMEPAD4_BUTTON_B", pyxel_core::GAMEPAD4_BUTTON_B)?;
+    m.add("GAMEPAD4_BUTTON_BACK", pyxel_core::GAMEPAD4_BUTTON_BACK)?;
+    m.add("GAMEPAD4_BUTTON_DPAD_DOWN", pyxel_core::GAMEPAD4_BUTTON_DPAD_DOWN)?;
+    m.add("GAMEPAD4_BUTTON_DPAD_LEFT", pyxel_core::GAMEPAD4_BUTTON_DPAD_LEFT)?;
+    m.add("GAMEPAD4_BUTTON_DPAD_RIGHT", pyxel_core::GAMEPAD4_BUTTON_DPAD_RIGHT)?;
+    m.add("GAMEPAD4_BUTTON_DPAD_UP", pyxel_core::GAMEPAD4_BUTTON_DPAD_UP)?;
+    m.add("GAMEPAD4_BUTTON_GUIDE", pyxel_core::GAMEPAD4_BUTTON_GUIDE)?;
+    m.add("GAMEPAD4_BUTTON_LEFTSHOULDER", pyxel_core::GAMEPAD4_BUTTON_LEFTSHOULDER)?;
+    m.add("GAMEPAD4_BUTTON_LEFTSTICK", pyxel_core::GAMEPAD4_BUTTON_LEFTSTICK)?;
+    m.add("GAMEPAD4_BUTTON_RIGHTSHOULDER", pyxel_core::GAMEPAD4_BUTTON_RIGHTSHOULDER)?;
+    m.add("GAMEPAD4_BUTTON_RIGHTSTICK", pyxel_core::GAMEPAD4_BUTTON_RIGHTSTICK)?;
+    m.add("GAMEPAD4_BUTTON_START", pyxel_core::GAMEPAD4_BUTTON_START)?;
+    m.add("GAMEPAD4_BUTTON_X", pyxel_core::GAMEPAD4_BUTTON_X)?;
+    m.add("GAMEPAD4_BUTTON_Y", pyxel_core::GAMEPAD4_BUTTON_Y)?;
+    m.add("KEY_AGAIN", pyxel_core::KEY_AGAIN)?;
+    m.add("KEY_ALTERASE", pyxel_core::KEY_ALTERASE)?;
+    m.add("KEY_AMPERSAND", pyxel_core::KEY_AMPERSAND)?;
+    m.add("KEY_APPLICATION", pyxel_core::KEY_APPLICATION)?;
+    m.add("KEY_ASTERISK", pyxel_core::KEY_ASTERISK)?;
+    m.add("KEY_AT", pyxel_core::KEY_AT)?;
+    m.add("KEY_BACKQUOTE", pyxel_core::KEY_BACKQUOTE)?;
+    m.add("KEY_BACKSLASH", pyxel_core::KEY_BACKSLASH)?;
+    m.add("KEY_CANCEL", pyxel_core::KEY_CANCEL)?;
+    m.add("KEY_CARET", pyxel_core::KEY_CARET)?;
+    m.add("KEY_CLEAR", pyxel_core::KEY_CLEAR)?;
+    m.add("KEY_CLEARAGAIN", pyxel_core::KEY_CLEARAGAIN)?;
+    m.add("KEY_COLON", pyxel_core::KEY_COLON)?;
+    m.add("KEY_COMMA", pyxel_core::KEY_COMMA)?;
+    m.add("KEY_COPY", pyxel_core::KEY_COPY)?;
+    m.add("KEY_CRSEL", pyxel_core::KEY_CRSEL)?;
+    m.add("KEY_CURRENCYSUBUNIT", pyxel_core::KEY_CURRENCYSUBUNIT)?;
+    m.add("KEY_CURRENCYUNIT", pyxel_core::KEY_CURRENCYUNIT)?;
+    m.add("KEY_CUT", pyxel_core::KEY_CUT)?;
+    m.add("KEY_DECIMALSEPARATOR", pyxel_core::KEY_DECIMALSEPARATOR)?;
+    m.add("KEY_DOLLAR", pyxel_core::KEY_DOLLAR)?;
+    m.add("KEY_EQUALS", pyxel_core::KEY_EQUALS)?;
+    m.add("KEY_EXCLAIM", pyxel_core::KEY_EXCLAIM)?;
+    m.add("KEY_EXECUTE", pyxel_core::KEY_EXECUTE)?;
+    m.add("KEY_EXSEL", pyxel_core::KEY_EXSEL)?;
+    m.add("KEY_F13", pyxel_core::KEY_F13)?;
+    m.add("KEY_F14", pyxel_core::KEY_F14)?;
+    m.add("KEY_F15", pyxel_core::KEY_F15)?;
+    m.add("KEY_F16", pyxel_core::KEY_F16)?;
+    m.add("KEY_F17", pyxel_core::KEY_F17)?;
+    m.add("KEY_F18", pyxel_core::KEY_F18)?;
+    m.add("KEY_F19", pyxel_core::KEY_F19)?;
+    m.add("KEY_F20", pyxel_core::KEY_F20)?;
+    m.add("KEY_F21", pyxel_core::KEY_F21)?;
+    m.add("KEY_F22", pyxel_core::KEY_F22)?;
+    m.add("KEY_F23", pyxel_core::KEY_F23)?;
+    m.add("KEY_F24", pyxel_core::KEY_F24)?;
+    m.add("KEY_FIND", pyxel_core::KEY_FIND)?;
+    m.add("KEY_GREATER", pyxel_core::KEY_GREATER)?;
+    m.add("KEY_HASH", pyxel_core::KEY_HASH)?;
+    m.add("KEY_HELP", pyxel_core::KEY_HELP)?;
+    m.add("KEY_KP_0", pyxel_core::KEY_KP_0)?;
+    m.add("KEY_KP_00", pyxel_core::KEY_KP_00)?;
+    m.add("KEY_KP_000", pyxel_core::KEY_KP_000)?;
+    m.add("KEY_KP_1", pyxel_core::KEY_KP_1)?;
+    m.add("KEY_KP_2", pyxel_core::KEY_KP_2)?;
+    m.add("KEY_KP_3", pyxel_core::KEY_KP_3)?;
+    m.add("KEY_KP_4", pyxel_core::KEY_KP_4)?;
+    m.add("KEY_KP_5", pyxel_core::KEY_KP_5)?;
+    m.add("KEY_KP_6", pyxel_core::KEY_KP_6)?;
+    m.add("KEY_KP_7", pyxel_core::KEY_KP_7)?;
+    m.add("KEY_KP_8", pyxel_core::KEY_KP_8)?;
+    m.add("KEY_KP_9", pyxel_core::KEY_KP_9)?;
+    m.add("KEY_KP_A", pyxel_core::KEY_KP_A)?;
+    m.add("KEY_KP_AMPERSAND", pyxel_core::KEY_KP_AMPERSAND)?;
+    m.add("KEY_KP_AT", pyxel_core::KEY_KP_AT)?;
+    m.add("KEY_KP_B", pyxel_core::KEY_KP_B)?;
+    m.add("KEY_KP_BACKSPACE", pyxel_core::KEY_KP_BACKSPACE)?;
+    m.add("KEY_KP_BINARY", pyxel_core::KEY_KP_BINARY)?;
+    m.add("KEY_KP_C", pyxel_core::KEY_KP_C)?;
+    m.add("KEY_KP_CLEAR", pyxel_core::KEY_KP_CLEAR)?;
+    m.add("KEY_KP_CLEARENTRY", pyxel_core::KEY_KP_CLEARENTRY)?;
+    m.add("KEY_KP_COLON", pyxel_core::KEY_KP_COLON)?;
+    m.add("KEY_KP_COMMA", pyxel_core::KEY_KP_COMMA)?;
+    m.add("KEY_KP_D", pyxel_core::KEY_KP_D)?;
+    m.add("KEY_KP_DBLAMPERSAND", pyxel_core::KEY_KP_DBLAMPERSAND)?;
+    m.add("KEY_KP_DBLVERTICALBAR", pyxel_core::KEY_KP_DBLVERTICALBAR)?;
+    m.add("KEY_KP_DECIMAL", pyxel_core::KEY_KP_DECIMAL)?;
+    m.add("KEY_KP_DIVIDE", pyxel_core::KEY_KP_DIVIDE)?;
+    m.add("KEY_KP_E", pyxel_core::KEY_KP_E)?;
+    m.add("KEY_KP_ENTER", pyxel_core::KEY_KP_ENTER)?;
+    m.add("KEY_KP_EQUALS", pyxel_core::KEY_KP_EQUALS)?;
+    m.add("KEY_KP_EQUALSAS400", pyxel_core::KEY_KP_EQUALSAS400)?;
+    m.add("KEY_KP_EXCLAM", pyxel_core::KEY_KP_EXCLAM)?;
+    m.add("KEY_KP_F", pyxel_core::KEY_KP_F)?;
+    m.add("KEY_KP_GREATER", pyxel_core::KEY_KP_GREATER)?;
+    m.add("KEY_KP_HASH", pyxel_core::KEY_KP_HASH)?;
+    m.add("KEY_KP_HEXADECIMAL", pyxel_core::KEY_KP_HEXADECIMAL)?;
+    m.add("KEY_KP_LEFTBRACE", pyxel_core::KEY_KP_LEFTBRACE)?;
+    m.add("KEY_KP_LEFTPAREN", pyxel_core::KEY_KP_LEFTPAREN)?;
+    m.add("KEY_KP_LESS", pyxel_core::KEY_KP_LESS)?;
+    m.add("KEY_KP_MEMADD", pyxel_core::KEY_KP_MEMADD)?;
+    m.add("KEY_KP_MEMCLEAR", pyxel_core::KEY_KP_MEMCLEAR)?;
+    m.add("KEY_KP_MEMDIVIDE", pyxel_core::KEY_KP_MEMDIVIDE)?;
+    m.add("KEY_KP_MEMMULTIPLY", pyxel_core::KEY_KP_MEMMULTIPLY)?;
+    m.add("KEY_KP_MEMRECALL", pyxel_core::KEY_KP_MEMRECALL)?;
+    m.add("KEY_KP_MEMSTORE", pyxel_core::KEY_KP_MEMSTORE)?;
+    m.add("KEY_KP_MEMSUBTRACT", pyxel_core::KEY_KP_MEMSUBTRACT)?;
+    m.add("KEY_KP_MINUS", pyxel_core::KEY_KP_MINUS)?;
+    m.add("KEY_KP_MULTIPLY", pyxel_core::KEY_KP_MULTIPLY)?;
+    m.add("KEY_KP_OCTAL", pyxel_core::KEY_KP_OCTAL)?;
+    m.add("KEY_KP_PERCENT", pyxel_core::KEY_KP_PERCENT)?;
+    m.add("KEY_KP_PERIOD", pyxel_core::KEY_KP_PERIOD)?;
+    m.add("KEY_KP_PLUS", pyxel_core::KEY_KP_PLUS)?;
+    m.add("KEY_KP_PLUSMINUS", pyxel_core::KEY_KP_PLUSMINUS)?;
+    m.add("KEY_KP_POWER", pyxel_core::KEY_KP_POWER)?;
+    m.add("KEY_KP_RIGHTBRACE", pyxel_core::KEY_KP_RIGHTBRACE)?;
+    m.add("KEY_KP_RIGHTPAREN", pyxel_core::KEY_KP_RIGHTPAREN)?;
+    m.add("KEY_KP_SPACE", pyxel_core::KEY_KP_SPACE)?;
+    m.add("KEY_KP_TAB", pyxel_core::KEY_KP_TAB)?;
+    m.add("KEY_KP_VERTICALBAR", pyxel_core::KEY_KP_VERTICALBAR)?;
+    m.add("KEY_KP_XOR", pyxel_core::KEY_KP_XOR)?;
+    m.add("KEY_LEFTBRACKET", pyxel_core::KEY_LEFTBRACKET)?;
+    m.add("KEY_LEFTPAREN", pyxel_core::KEY_LEFTPAREN)?;
+    m.add("KEY_LESS", pyxel_core::KEY_LESS)?;
+    m.add("KEY_MENU", pyxel_core::KEY_MENU)?;
+    m.add("KEY_MINUS", pyxel_core::KEY_MINUS)?;
+    m.add("KEY_MUTE", pyxel_core::KEY_MUTE)?;
+    m.add("KEY_NUMLOCKCLEAR", pyxel_core::KEY_NUMLOCKCLEAR)?;
+    m.add("KEY_OPER", pyxel_core::KEY_OPER)?;
+    m.add("KEY_OUT", pyxel_core::KEY_OUT)?;
+    m.add("KEY_PASTE", pyxel_core::KEY_PASTE)?;
+    m.add("KEY_PAUSE", pyxel_core::KEY_PAUSE)?;
+    m.add("KEY_PERCENT", pyxel_core::KEY_PERCENT)?;
+    m.add("KEY_PERIOD", pyxel_core::KEY_PERIOD)?;
+    m.add("KEY_PLUS", pyxel_core::KEY_PLUS)?;
+    m.add("KEY_POWER", pyxel_core::KEY_POWER)?;
+    m.add("KEY_PRINTSCREEN", pyxel_core::KEY_PRINTSCREEN)?;
+    m.add("KEY_PRIOR", pyxel_core::KEY_PRIOR)?;
+    m.add("KEY_QUESTION", pyxel_core::KEY_QUESTION)?;
+    m.add("KEY_QUOTE", pyxel_core::KEY_QUOTE)?;
+    m.add("KEY_QUOTEDBL", pyxel_core::KEY_QUOTEDBL)?;
+    m.add("KEY_RETURN2", pyxel_core::KEY_RETURN2)?;
+    m.add("KEY_RIGHTBRACKET", pyxel_core::KEY_RIGHTBRACKET)?;
+    m.add("KEY_RIGHTPAREN", pyxel_core::KEY_RIGHTPAREN)?;
+    m.add("KEY_SCROLLLOCK", pyxel_core::KEY_SCROLLLOCK)?;
+    m.add("KEY_SELECT", pyxel_core::KEY_SELECT)?;
+    m.add("KEY_SEMICOLON", pyxel_core::KEY_SEMICOLON)?;
+    m.add("KEY_SEPARATOR", pyxel_core::KEY_SEPARATOR)?;
+    m.add("KEY_SLASH", pyxel_core::KEY_SLASH)?;
+    m.add("KEY_STOP", pyxel_core::KEY_STOP)?;
+    m.add("KEY_SYSREQ", pyxel_core::KEY_SYSREQ)?;
+    m.add("KEY_THOUSANDSSEPARATOR", pyxel_core::KEY_THOUSANDSSEPARATOR)?;
+    m.add("KEY_UNDERSCORE", pyxel_core::KEY_UNDERSCORE)?;
+    m.add("KEY_UNDO", pyxel_core::KEY_UNDO)?;
+    m.add("KEY_UNKNOWN", pyxel_core::KEY_UNKNOWN)?;
+    m.add("KEY_VOLUMEDOWN", pyxel_core::KEY_VOLUMEDOWN)?;
+    m.add("KEY_VOLUMEUP", pyxel_core::KEY_VOLUMEUP)?;
+
     Ok(())
 }
 
@@ -1751,7 +1973,7 @@ impl PyImageList {
         let i = if idx < 0 { idx + len } else { idx };
         if i < 0 || i >= len {
             return Err(pyo3::exceptions::PyIndexError::new_err(
-                format!("image bank index {idx} out of range")
+                String::from("list index out of range")
             ));
         }
         Ok(PyImage { image: images[i as usize].clone() })
@@ -1763,7 +1985,7 @@ impl PyImageList {
         let i = if idx < 0 { idx + len } else { idx };
         if i < 0 || i >= len {
             return Err(pyo3::exceptions::PyIndexError::new_err(
-                format!("image bank index {idx} out of range")
+                String::from("list index out of range")
             ));
         }
         // Replace the bank's underlying image outright (Rc clone: shares
@@ -2055,7 +2277,7 @@ impl PySoundList {
         let i = if idx < 0 { idx + len } else { idx };
         if i < 0 || i >= len {
             return Err(pyo3::exceptions::PyIndexError::new_err(
-                format!("sound bank index {idx} out of range")
+                String::from("list index out of range")
             ));
         }
         Ok(PySound { sound_ref: SoundRef::Bank(i as usize) })
@@ -2066,7 +2288,7 @@ impl PySoundList {
         let i = if idx < 0 { idx + len } else { idx };
         if i < 0 || i >= len {
             return Err(pyo3::exceptions::PyIndexError::new_err(
-                format!("sound bank index {idx} out of range")
+                String::from("list index out of range")
             ));
         }
         pyxel_core::sounds()[i as usize] = val.rc().clone();
@@ -2172,7 +2394,7 @@ impl PyTilemap {
             pyxel_core::ImageSource::Image(pyimg.rc().clone())
         } else {
             return Err(pyo3::exceptions::PyTypeError::new_err(
-                "img must be an image bank index (int) or an Image instance"
+                "img must be u32, Image"
             ));
         };
         Ok(PyTilemap { tilemap: pyxel_core::Tilemap::new(width, height, imgsrc) })
@@ -2429,7 +2651,7 @@ impl PyTilemapList {
         let i = if idx < 0 { idx + len } else { idx };
         if i < 0 || i >= len {
             return Err(pyo3::exceptions::PyIndexError::new_err(
-                format!("tilemap bank index {idx} out of range")
+                String::from("list index out of range")
             ));
         }
         Ok(PyTilemap { tilemap: pyxel_core::tilemaps()[i as usize].clone() })
@@ -2440,7 +2662,7 @@ impl PyTilemapList {
         let i = if idx < 0 { idx + len } else { idx };
         if i < 0 || i >= len {
             return Err(pyo3::exceptions::PyIndexError::new_err(
-                format!("tilemap bank index {idx} out of range")
+                String::from("list index out of range")
             ));
         }
         // Same fix as ImageList::__setitem__: replace the bank outright
@@ -2646,7 +2868,7 @@ impl PyChannel {
                 channel.play(sounds, sec, should_loop, should_resume);
             } else {
                 return Err(pyo3::exceptions::PyTypeError::new_err(
-                    "snd must be an int, list of ints, Sound, list of Sounds, or MML string"
+                    "snd must be u32, Vec<u32>, Sound, list of Sound, or MML str"
                 ));
             }
         }
@@ -2693,7 +2915,7 @@ impl PyColors {
         let len = colors.len() as i64;
         let i = if idx < 0 { idx + len } else { idx };
         if i < 0 || i >= len {
-            return Err(pyo3::exceptions::PyIndexError::new_err("color index out of range"));
+            return Err(pyo3::exceptions::PyIndexError::new_err("list index out of range"));
         }
         Ok(colors[i as usize])
     }
@@ -2706,7 +2928,7 @@ impl PyColors {
             let len = colors.len() as i64;
             let i = if idx_i64 < 0 { idx_i64 + len } else { idx_i64 };
             if i < 0 || i >= len {
-                return Err(pyo3::exceptions::PyIndexError::new_err("color index out of range"));
+                return Err(pyo3::exceptions::PyIndexError::new_err("list index out of range"));
             }
             colors[i as usize] = v;
         } else {
@@ -2736,7 +2958,7 @@ impl PyColors {
         let len = colors.len() as i64;
         let i = if idx < 0 { idx + len } else { idx };
         if i < 0 || i >= len {
-            return Err(pyo3::exceptions::PyIndexError::new_err("color index out of range"));
+            return Err(pyo3::exceptions::PyIndexError::new_err("list index out of range"));
         }
         colors.remove(i as usize);
         Ok(())
@@ -2836,7 +3058,7 @@ impl PyChannelList {
         let i = if idx < 0 { idx + len } else { idx };
         if i < 0 || i >= len {
             return Err(pyo3::exceptions::PyIndexError::new_err(
-                format!("channel index {idx} out of range")
+                String::from("list index out of range")
             ));
         }
         Ok(PyChannel { channel_ref: ChannelRef::Bank(i as usize) })
@@ -3137,7 +3359,7 @@ impl PyToneList {
         let i = if idx < 0 { idx + len } else { idx };
         if i < 0 || i >= len {
             return Err(pyo3::exceptions::PyIndexError::new_err(
-                format!("tone bank index {idx} out of range")
+                String::from("list index out of range")
             ));
         }
         Ok(PyTone { tone_ref: ToneRef::Bank(i as usize) })
@@ -3632,7 +3854,7 @@ impl PyMusicList {
         let i = if idx < 0 { idx + len } else { idx };
         if i < 0 || i >= len {
             return Err(pyo3::exceptions::PyIndexError::new_err(
-                format!("music bank index {idx} out of range")
+                String::from("list index out of range")
             ));
         }
         Ok(PyMusic { music_ref: MusicRef::Bank(i as usize) })
@@ -3643,7 +3865,7 @@ impl PyMusicList {
         let i = if idx < 0 { idx + len } else { idx };
         if i < 0 || i >= len {
             return Err(pyo3::exceptions::PyIndexError::new_err(
-                format!("music bank index {idx} out of range")
+                String::from("list index out of range")
             ));
         }
         pyxel_core::musics()[i as usize] = val.rc().clone();
