@@ -45,6 +45,141 @@ fn warn_deprecated_once(key: &'static str, message: &str) {
 }
 
 // ---------------------------------------------------------------------------
+// Live list views (fixes "getter returns a copy" for Sound.notes/tones/
+// volumes/effects and Tone.wavetable)
+// ---------------------------------------------------------------------------
+// Previously these getters returned a plain Vec<T> — a snapshot copy.
+// `snd.notes.append(60)` silently mutated that throwaway copy and never
+// touched the real underlying field, since Python has no way to write
+// a mutation back through a plain returned list. Each of the 5 fields
+// below needs the same fix: a dedicated wrapper class holding a
+// reference back to the parent Sound/Tone, implementing the list
+// protocol by reading/writing the real field directly on every call.
+// One macro generates all 5, parameterized by wrapper name, parent Rc
+// type, element type (must be Copy — all 5 are: i8/u8/u32), and field
+// name.
+macro_rules! define_live_list {
+    ($wrapper:ident, $py_name:literal, $parent_rc:ty, $elem:ty, $field:ident) => {
+        #[pyclass(name = $py_name, unsendable)]
+        pub struct $wrapper {
+            parent: $parent_rc,
+        }
+
+        #[pymethods]
+        impl $wrapper {
+            pub fn __len__(&self) -> usize {
+                unsafe { (&*self.parent.get()).$field.len() }
+            }
+
+            pub fn __getitem__(&self, idx: i64) -> PyResult<$elem> {
+                unsafe {
+                    let v = &(&*self.parent.get()).$field;
+                    let len = v.len() as i64;
+                    let i = if idx < 0 { idx + len } else { idx };
+                    if i < 0 || i >= len {
+                        return Err(pyo3::exceptions::PyIndexError::new_err("index out of range"));
+                    }
+                    Ok(v[i as usize])
+                }
+            }
+
+            pub fn __setitem__(&self, idx: i64, val: $elem) -> PyResult<()> {
+                unsafe {
+                    let v = &mut (&mut *self.parent.get()).$field;
+                    let len = v.len() as i64;
+                    let i = if idx < 0 { idx + len } else { idx };
+                    if i < 0 || i >= len {
+                        return Err(pyo3::exceptions::PyIndexError::new_err("index out of range"));
+                    }
+                    v[i as usize] = val;
+                    Ok(())
+                }
+            }
+
+            pub fn __delitem__(&self, idx: i64) -> PyResult<()> {
+                unsafe {
+                    let v = &mut (&mut *self.parent.get()).$field;
+                    let len = v.len() as i64;
+                    let i = if idx < 0 { idx + len } else { idx };
+                    if i < 0 || i >= len {
+                        return Err(pyo3::exceptions::PyIndexError::new_err("index out of range"));
+                    }
+                    v.remove(i as usize);
+                    Ok(())
+                }
+            }
+
+            pub fn append(&self, val: $elem) {
+                unsafe { (&mut *self.parent.get()).$field.push(val); }
+            }
+
+            pub fn insert(&self, idx: usize, val: $elem) {
+                unsafe {
+                    let v = &mut (&mut *self.parent.get()).$field;
+                    let idx = idx.min(v.len());
+                    v.insert(idx, val);
+                }
+            }
+
+            #[pyo3(signature = (idx=None))]
+            pub fn pop(&self, idx: Option<i64>) -> PyResult<$elem> {
+                unsafe {
+                    let v = &mut (&mut *self.parent.get()).$field;
+                    let len = v.len() as i64;
+                    if len == 0 {
+                        return Err(pyo3::exceptions::PyIndexError::new_err("pop from empty list"));
+                    }
+                    let i = idx.unwrap_or(-1);
+                    let i = if i < 0 { i + len } else { i };
+                    if i < 0 || i >= len {
+                        return Err(pyo3::exceptions::PyIndexError::new_err("pop index out of range"));
+                    }
+                    Ok(v.remove(i as usize))
+                }
+            }
+
+            pub fn extend(&self, vals: Vec<$elem>) {
+                unsafe { (&mut *self.parent.get()).$field.extend(vals); }
+            }
+
+            pub fn clear(&self) {
+                unsafe { (&mut *self.parent.get()).$field.clear(); }
+            }
+
+            pub fn __repr__(&self) -> String {
+                unsafe { format!("{:?}", (&*self.parent.get()).$field) }
+            }
+
+            pub fn __bool__(&self) -> bool {
+                unsafe { !(&*self.parent.get()).$field.is_empty() }
+            }
+
+            pub fn __reversed__(&self) -> Vec<$elem> {
+                unsafe { (&*self.parent.get()).$field.iter().rev().copied().collect() }
+            }
+
+            pub fn __iadd__(&self, vals: Vec<$elem>) {
+                unsafe { (&mut *self.parent.get()).$field.extend(vals); }
+            }
+
+            pub fn __eq__(&self, other: Vec<$elem>) -> bool {
+                unsafe { (&*self.parent.get()).$field == other }
+            }
+
+            pub fn to_list(&self) -> Vec<$elem> {
+                unsafe { (&*self.parent.get()).$field.clone() }
+            }
+        }
+    };
+}
+
+define_live_list!(PySoundNotes,   "SoundNotes",   pyxel_core::RcSound, pyxel_core::SoundNote,   notes);
+define_live_list!(PySoundTones,   "SoundTones",   pyxel_core::RcSound, pyxel_core::SoundTone,   tones);
+define_live_list!(PySoundVolumes, "SoundVolumes", pyxel_core::RcSound, pyxel_core::SoundVolume, volumes);
+define_live_list!(PySoundEffects, "SoundEffects", pyxel_core::RcSound, pyxel_core::SoundEffect, effects);
+define_live_list!(PyToneWavetable, "ToneWavetable", pyxel_core::RcTone, pyxel_core::ToneSample, wavetable);
+
+// ---------------------------------------------------------------------------
 // Pyxel Python module — v0.4.0 minimal set
 // ---------------------------------------------------------------------------
 
@@ -1757,8 +1892,8 @@ impl PySound {
     }
 
     #[getter]
-    pub fn notes(&self) -> Vec<pyxel_core::SoundNote> {
-        unsafe { (&*self.rc().get()).notes.clone() }
+    pub fn notes(&self) -> PySoundNotes {
+        PySoundNotes { parent: self.rc().clone() }
     }
 
     #[setter(notes)]
@@ -1767,8 +1902,8 @@ impl PySound {
     }
 
     #[getter]
-    pub fn tones(&self) -> Vec<pyxel_core::SoundTone> {
-        unsafe { (&*self.rc().get()).tones.clone() }
+    pub fn tones(&self) -> PySoundTones {
+        PySoundTones { parent: self.rc().clone() }
     }
 
     #[setter(tones)]
@@ -1777,8 +1912,8 @@ impl PySound {
     }
 
     #[getter]
-    pub fn volumes(&self) -> Vec<pyxel_core::SoundVolume> {
-        unsafe { (&*self.rc().get()).volumes.clone() }
+    pub fn volumes(&self) -> PySoundVolumes {
+        PySoundVolumes { parent: self.rc().clone() }
     }
 
     #[setter(volumes)]
@@ -1787,8 +1922,8 @@ impl PySound {
     }
 
     #[getter]
-    pub fn effects(&self) -> Vec<pyxel_core::SoundEffect> {
-        unsafe { (&*self.rc().get()).effects.clone() }
+    pub fn effects(&self) -> PySoundEffects {
+        PySoundEffects { parent: self.rc().clone() }
     }
 
     #[setter(effects)]
@@ -2931,8 +3066,8 @@ impl PyTone {
     }
 
     #[getter]
-    pub fn wavetable(&self) -> Vec<pyxel_core::ToneSample> {
-        unsafe { (&*self.rc().get()).wavetable.clone() }
+    pub fn wavetable(&self) -> PyToneWavetable {
+        PyToneWavetable { parent: self.rc().clone() }
     }
 
     #[setter]
@@ -2946,7 +3081,7 @@ impl PyTone {
     // single shared key (where whichever ran first consumed the only
     // warning) made the second one silently stop firing.
     #[getter]
-    pub fn waveform(&self) -> Vec<pyxel_core::ToneSample> {
+    pub fn waveform(&self) -> PyToneWavetable {
         warn_deprecated_once("Tone.waveform.get", "Tone.waveform (use Tone.wavetable instead)");
         self.wavetable()
     }
@@ -3122,6 +3257,292 @@ impl PyToneList {
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
+// Music.seqs — full "Seqs" protocol (nested list: one Vec<u32> per channel)
+// ---------------------------------------------------------------------------
+// Music.seqs needs richer support than the other Seq-like wrappers:
+// upstream's own tests exercise real slice access/assignment on the
+// OUTER list (e.g. msc.seqs[2:0] = [[7]] to insert a channel), which we
+// deliberately left unsupported elsewhere (colors/channels/etc. — see
+// the v1.0 known-limitations note) but which Music.seqs specifically
+// requires. Two classes: PyMusicSeq (one channel's Vec<u32>, live) and
+// PyMusicSeqs (the outer list of channels, live).
+
+// -- Inner: one channel's sequence --
+#[pyclass(name = "MusicSeq", unsendable)]
+pub struct PyMusicSeq {
+    parent: pyxel_core::RcMusic,
+    channel: usize,
+}
+
+#[pymethods]
+impl PyMusicSeq {
+    pub fn __len__(&self) -> usize {
+        unsafe { (&*self.parent.get()).seqs[self.channel].len() }
+    }
+
+    pub fn __getitem__(&self, idx: i64) -> PyResult<u32> {
+        unsafe {
+            let v = &(&*self.parent.get()).seqs[self.channel];
+            let len = v.len() as i64;
+            let i = if idx < 0 { idx + len } else { idx };
+            if i < 0 || i >= len {
+                return Err(pyo3::exceptions::PyIndexError::new_err("index out of range"));
+            }
+            Ok(v[i as usize])
+        }
+    }
+
+    pub fn __setitem__(&self, idx: i64, val: u32) -> PyResult<()> {
+        unsafe {
+            let v = &mut (&mut *self.parent.get()).seqs[self.channel];
+            let len = v.len() as i64;
+            let i = if idx < 0 { idx + len } else { idx };
+            if i < 0 || i >= len {
+                return Err(pyo3::exceptions::PyIndexError::new_err("index out of range"));
+            }
+            v[i as usize] = val;
+            Ok(())
+        }
+    }
+
+    pub fn __delitem__(&self, idx: i64) -> PyResult<()> {
+        unsafe {
+            let v = &mut (&mut *self.parent.get()).seqs[self.channel];
+            let len = v.len() as i64;
+            let i = if idx < 0 { idx + len } else { idx };
+            if i < 0 || i >= len {
+                return Err(pyo3::exceptions::PyIndexError::new_err("index out of range"));
+            }
+            v.remove(i as usize);
+            Ok(())
+        }
+    }
+
+    pub fn append(&self, val: u32) {
+        unsafe { (&mut *self.parent.get()).seqs[self.channel].push(val); }
+    }
+
+    pub fn insert(&self, idx: usize, val: u32) {
+        unsafe {
+            let v = &mut (&mut *self.parent.get()).seqs[self.channel];
+            let idx = idx.min(v.len());
+            v.insert(idx, val);
+        }
+    }
+
+    #[pyo3(signature = (idx=None))]
+    pub fn pop(&self, idx: Option<i64>) -> PyResult<u32> {
+        unsafe {
+            let v = &mut (&mut *self.parent.get()).seqs[self.channel];
+            let len = v.len() as i64;
+            if len == 0 {
+                return Err(pyo3::exceptions::PyIndexError::new_err("pop from empty list"));
+            }
+            let i = idx.unwrap_or(-1);
+            let i = if i < 0 { i + len } else { i };
+            if i < 0 || i >= len {
+                return Err(pyo3::exceptions::PyIndexError::new_err("pop index out of range"));
+            }
+            Ok(v.remove(i as usize))
+        }
+    }
+
+    pub fn extend(&self, vals: Vec<u32>) {
+        unsafe { (&mut *self.parent.get()).seqs[self.channel].extend(vals); }
+    }
+
+    pub fn clear(&self) {
+        unsafe { (&mut *self.parent.get()).seqs[self.channel].clear(); }
+    }
+
+    pub fn __repr__(&self) -> String {
+        unsafe { format!("{:?}", (&*self.parent.get()).seqs[self.channel]) }
+    }
+
+    pub fn __bool__(&self) -> bool {
+        unsafe { !(&*self.parent.get()).seqs[self.channel].is_empty() }
+    }
+
+    pub fn __reversed__(&self) -> Vec<u32> {
+        unsafe { (&*self.parent.get()).seqs[self.channel].iter().rev().copied().collect() }
+    }
+
+    pub fn __iadd__(&self, vals: Vec<u32>) {
+        unsafe { (&mut *self.parent.get()).seqs[self.channel].extend(vals); }
+    }
+
+    pub fn __eq__(&self, other: Vec<u32>) -> bool {
+        unsafe { (&*self.parent.get()).seqs[self.channel] == other }
+    }
+
+    pub fn to_list(&self) -> Vec<u32> {
+        unsafe { (&*self.parent.get()).seqs[self.channel].clone() }
+    }
+}
+
+// -- Outer: the list of channels --
+#[pyclass(name = "MusicSeqs", unsendable)]
+pub struct PyMusicSeqs {
+    parent: pyxel_core::RcMusic,
+}
+
+#[pymethods]
+impl PyMusicSeqs {
+    pub fn __len__(&self) -> usize {
+        unsafe { (&*self.parent.get()).seqs.len() }
+    }
+
+    // int -> a live PyMusicSeq view; slice -> a plain nested list
+    // (matching upstream: msc.seqs[0:2] == [[0], [1]], not wrapper
+    // objects — slicing reads a snapshot, same as any Python list
+    // slice).
+    pub fn __getitem__(&self, py: pyo3::Python, idx: pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<pyo3::PyObject> {
+        use pyo3::IntoPy;
+        unsafe {
+            let len = (&*self.parent.get()).seqs.len();
+            if let Ok(i) = idx.extract::<i64>() {
+                let l = len as i64;
+                let i = if i < 0 { i + l } else { i };
+                if i < 0 || i >= l {
+                    return Err(pyo3::exceptions::PyIndexError::new_err("music channel index out of range"));
+                }
+                return Ok(PyMusicSeq { parent: self.parent.clone(), channel: i as usize }.into_py(py));
+            }
+            if let Ok(slice) = idx.downcast::<pyo3::types::PySlice>() {
+                let indices = slice.indices(len as i64)?;
+                let mut result = Vec::new();
+                let mut i = indices.start;
+                if indices.step > 0 {
+                    while i < indices.stop {
+                        result.push((&*self.parent.get()).seqs[i as usize].clone());
+                        i += indices.step;
+                    }
+                } else if indices.step < 0 {
+                    while i > indices.stop {
+                        result.push((&*self.parent.get()).seqs[i as usize].clone());
+                        i += indices.step;
+                    }
+                }
+                return Ok(result.into_py(py));
+            }
+            Err(pyo3::exceptions::PyTypeError::new_err("music channel index must be an int or slice"))
+        }
+    }
+
+    // int -> replace one channel's whole sequence; slice (step=1 only)
+    // -> splice channels in/out/replace, matching Python's own list
+    // slice-assignment semantics (e.g. seqs[2:0] = [[7]] inserts a new
+    // channel at position 2, since slice 2:0 is an empty range).
+    pub fn __setitem__(&self, idx: pyo3::Bound<'_, pyo3::PyAny>, val: pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<()> {
+        unsafe {
+            let music = &mut *self.parent.get();
+            if let Ok(i) = idx.extract::<i64>() {
+                let len = music.seqs.len() as i64;
+                let i = if i < 0 { i + len } else { i };
+                if i < 0 || i >= len {
+                    return Err(pyo3::exceptions::PyIndexError::new_err("music channel index out of range"));
+                }
+                let new_seq = val.extract::<Vec<u32>>()?;
+                music.seqs[i as usize] = new_seq;
+                return Ok(());
+            }
+            if let Ok(slice) = idx.downcast::<pyo3::types::PySlice>() {
+                let len = music.seqs.len() as i64;
+                let indices = slice.indices(len)?;
+                if indices.step != 1 {
+                    return Err(pyo3::exceptions::PyValueError::new_err(
+                        "extended slices (step != 1) are not supported for Music.seqs assignment"
+                    ));
+                }
+                let replacement = val.extract::<Vec<Vec<u32>>>()?;
+                let start = indices.start.max(0) as usize;
+                let stop = indices.stop.max(indices.start) as usize;
+                music.seqs.splice(start..stop, replacement);
+                return Ok(());
+            }
+            Err(pyo3::exceptions::PyTypeError::new_err("music channel index must be an int or slice"))
+        }
+    }
+
+    pub fn __delitem__(&self, idx: i64) -> PyResult<()> {
+        unsafe {
+            let music = &mut *self.parent.get();
+            let len = music.seqs.len() as i64;
+            let i = if idx < 0 { idx + len } else { idx };
+            if i < 0 || i >= len {
+                return Err(pyo3::exceptions::PyIndexError::new_err("music channel index out of range"));
+            }
+            music.seqs.remove(i as usize);
+            Ok(())
+        }
+    }
+
+    pub fn append(&self, val: Vec<u32>) {
+        unsafe { (&mut *self.parent.get()).seqs.push(val); }
+    }
+
+    pub fn insert(&self, idx: usize, val: Vec<u32>) {
+        unsafe {
+            let seqs = &mut (&mut *self.parent.get()).seqs;
+            let idx = idx.min(seqs.len());
+            seqs.insert(idx, val);
+        }
+    }
+
+    #[pyo3(signature = (idx=None))]
+    pub fn pop(&self, idx: Option<i64>) -> PyResult<Vec<u32>> {
+        unsafe {
+            let seqs = &mut (&mut *self.parent.get()).seqs;
+            let len = seqs.len() as i64;
+            if len == 0 {
+                return Err(pyo3::exceptions::PyIndexError::new_err("pop from empty list"));
+            }
+            let i = idx.unwrap_or(-1);
+            let i = if i < 0 { i + len } else { i };
+            if i < 0 || i >= len {
+                return Err(pyo3::exceptions::PyIndexError::new_err("pop index out of range"));
+            }
+            Ok(seqs.remove(i as usize))
+        }
+    }
+
+    pub fn extend(&self, vals: Vec<Vec<u32>>) {
+        unsafe { (&mut *self.parent.get()).seqs.extend(vals); }
+    }
+
+    pub fn clear(&self) {
+        unsafe { (&mut *self.parent.get()).seqs.clear(); }
+    }
+
+    pub fn __repr__(&self) -> String {
+        unsafe { format!("Seqs{:?}", (&*self.parent.get()).seqs) }
+    }
+
+    pub fn __bool__(&self) -> bool {
+        unsafe { !(&*self.parent.get()).seqs.is_empty() }
+    }
+
+    pub fn __reversed__(&self) -> Vec<Vec<u32>> {
+        unsafe { (&*self.parent.get()).seqs.iter().rev().cloned().collect() }
+    }
+
+    pub fn __iadd__(&self, vals: Vec<Vec<u32>>) {
+        unsafe { (&mut *self.parent.get()).seqs.extend(vals); }
+    }
+
+    // Deprecated aliases for the whole-list bulk operations.
+    pub fn from_list(&self, vals: Vec<Vec<u32>>) {
+        warn_deprecated_once("MusicSeqs.from_list", "Seqs.from_list() (use direct assignment or extend() instead)");
+        unsafe { (&mut *self.parent.get()).seqs = vals; }
+    }
+
+    pub fn to_list(&self) -> Vec<Vec<u32>> {
+        warn_deprecated_once("MusicSeqs.to_list", "Seqs.to_list() (use list(seqs) instead)");
+        unsafe { (&*self.parent.get()).seqs.clone() }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Music wrapper (music_wrapper.rs)
 // ---------------------------------------------------------------------------
 
@@ -3154,8 +3575,8 @@ impl PyMusic {
     }
 
     #[getter]
-    pub fn seqs(&self) -> Vec<Vec<u32>> {
-        unsafe { (&*self.rc().get()).seqs.clone() }
+    pub fn seqs(&self) -> PyMusicSeqs {
+        PyMusicSeqs { parent: self.rc().clone() }
     }
 
     #[setter]
@@ -3165,7 +3586,7 @@ impl PyMusic {
 
     // Deprecated: snds_list (alias for seqs, getter only)
     #[getter]
-    pub fn snds_list(&self) -> Vec<Vec<u32>> {
+    pub fn snds_list(&self) -> PyMusicSeqs {
         warn_deprecated_once("Music.snds_list", "Music.snds_list (use Music.seqs instead)");
         self.seqs()
     }
