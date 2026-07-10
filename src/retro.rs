@@ -283,6 +283,26 @@ pub unsafe extern "C" fn retro_init() {
     // prepare_freethreaded_python() so CPython's own startup sees it.
     std::env::set_var("PYTHONUTF8", "1");
 
+    // Lakka-LibreELEC patches CPython's own source
+    // (Python/initconfig.c) to change Py_OptimizeFlag's default from 0
+    // to 1 system-wide (packages/lang/Python3/patches/Python3-0000-
+    // default-is-optimized.patch) — meaning every script run under
+    // lr-pyxel silently had __debug__ == False and every `assert`
+    // statement compiled to a no-op, with no error or warning of any
+    // kind. Found via a custom test harness built to run upstream
+    // Pyxel's own pytest suite inside lr-pyxel: a deliberately-false
+    // canary assert(1 == 2) never raised. Py_OptimizeFlag is a plain
+    // exported C global (not something PyO3's prepare_freethreaded_python()
+    // exposes a config knob for), so it's reset directly via FFI before
+    // the interpreter starts, undoing Lakka's patched default back to
+    // upstream CPython's normal behavior. Must happen before
+    // prepare_freethreaded_python(), since Py_OptimizeFlag is read once
+    // during interpreter startup and baked into how every subsequent
+    // compile() call treats assert/__debug__ for the rest of the
+    // process's life.
+    #[allow(deprecated)]
+    unsafe { pyo3::ffi::Py_OptimizeFlag = 0; }
+
     // Start Python interpreter (after append_to_inittab)
     pyo3::prepare_freethreaded_python();
 
