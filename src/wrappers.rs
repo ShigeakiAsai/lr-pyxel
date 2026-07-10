@@ -82,15 +82,25 @@ pub fn blt(x: f32, y: f32, img: pyo3::Bound<'_, pyo3::PyAny>, u: f32, v: f32, w:
 
 // bltm(x, y, tm, u, v, w, h, colkey=None, rotate=None, scale=None)
 // Draws a region of tilemap bank `tm` onto the screen at (x, y).
+// tm can be a bank index (u32) or a Tilemap instance — mirrors blt()'s
+// existing int/Image handling, which bltm() previously lacked (only
+// took a bank index), unlike upstream Pyxel's bltm/Tilemap.blt.
 #[pyfunction]
 #[pyo3(signature = (x, y, tm, u, v, w, h, colkey=None, rotate=None, scale=None))]
 #[allow(clippy::too_many_arguments)]
-pub fn bltm(x: f32, y: f32, tm: u32, u: f32, v: f32, w: f32, h: f32, colkey: Option<u8>, rotate: Option<f32>, scale: Option<f32>) {
+pub fn bltm(x: f32, y: f32, tm: pyo3::Bound<'_, pyo3::PyAny>, u: f32, v: f32, w: f32, h: f32, colkey: Option<u8>, rotate: Option<f32>, scale: Option<f32>) -> PyResult<()> {
     unsafe {
-        if PYXEL_READY {
-            pyxel_core::pyxel().draw_tilemap(x, y, tm, u, v, w, h, colkey, rotate, scale);
+        if !PYXEL_READY { return Ok(()); }
+        if let Ok(idx) = tm.extract::<u32>() {
+            pyxel_core::pyxel().draw_tilemap(x, y, idx, u, v, w, h, colkey, rotate, scale);
+        } else if let Ok(pytm) = tm.extract::<pyo3::PyRef<PyTilemap>>() {
+            let src = pytm.rc().clone();
+            let screen = pyxel_core::screen();
+            let dst = &mut *screen.get();
+            dst.draw_tilemap(x, y, &src, u, v, w, h, colkey, rotate, scale);
         }
     }
+    Ok(())
 }
 
 // blt3d(x, y, w, h, img, pos, rot, fov=None, colkey=None)
@@ -392,7 +402,18 @@ pub fn sound_set(
 // ---------------------------------------------------------------------------
 
 // play(ch, snd, sec=None, loop=False, resume=False, tick=None)
-// snd can be a single sound index (u32) or a list of sound indices (Vec<u32>)
+// snd can be a sound index (u32), a list of sound indices (Vec<u32>), a
+// Sound instance, a list of Sound instances, or a raw MML string played
+// directly on this channel (bypassing the sound bank entirely) — see
+// the official API reference: "snd can be a sound number, a list, a
+// Sound instance, a list of Sounds, or an MML string". The string case
+// was missing entirely here (a documented, real upstream feature, not
+// an edge case) — found via Braveforce-LDV_Demo.pyxapp's BGM playback
+// (`pyxel.play(ch, mml_string)`), which failed silently from Python's
+// perspective (caught by the game's own try/except with no visible
+// symptom beyond "no BGM"); SFX in the same game go through
+// Sound.mml() + an int index instead, which already worked, so nothing
+// pointed at play() itself until the two were compared side by side.
 // tick is an alternate way to specify the start position (1 tick = 1/120
 // sec), restored in upstream Pyxel after being replaced by `sec` in 2.4.
 // If both are given, tick takes precedence.
@@ -408,9 +429,23 @@ pub fn play(ch: u32, snd: pyo3::Bound<'_, pyo3::PyAny>, sec: Option<f32>, r#loop
             pyxel_core::pyxel().play_sound(ch, idx, sec, should_loop, should_resume);
         } else if let Ok(seq) = snd.extract::<Vec<u32>>() {
             pyxel_core::pyxel().play(ch, &seq, sec, should_loop, should_resume);
+        } else if let Ok(mml) = snd.extract::<String>() {
+            let _lock = pyxel_core::AudioLock::lock();
+            let channel = &mut *pyxel_core::channels()[ch as usize].get();
+            channel.play_mml(&mml, sec, should_loop, should_resume)
+                .map_err(pyo3::exceptions::PyValueError::new_err)?;
+        } else if let Ok(snd_ref) = snd.extract::<pyo3::PyRef<PySound>>() {
+            let _lock = pyxel_core::AudioLock::lock();
+            let channel = &mut *pyxel_core::channels()[ch as usize].get();
+            channel.play(vec![snd_ref.rc().clone()], sec, should_loop, should_resume);
+        } else if let Ok(snd_refs) = snd.extract::<Vec<pyo3::PyRef<PySound>>>() {
+            let sounds: Vec<_> = snd_refs.iter().map(|s| s.rc().clone()).collect();
+            let _lock = pyxel_core::AudioLock::lock();
+            let channel = &mut *pyxel_core::channels()[ch as usize].get();
+            channel.play(sounds, sec, should_loop, should_resume);
         } else {
             return Err(pyo3::exceptions::PyTypeError::new_err(
-                "snd must be an int or list of ints"
+                "snd must be an int, list of ints, Sound, list of Sounds, or MML string"
             ));
         }
         Ok(())
@@ -494,7 +529,7 @@ pub fn channel_fn(ch: u32) -> PyResult<PyChannel> {
     if ch as usize >= pyxel_core::NUM_CHANNELS as usize {
         return Err(pyo3::exceptions::PyValueError::new_err("Invalid channel index"));
     }
-    Ok(PyChannel { bank: ch as usize })
+    Ok(PyChannel { channel_ref: ChannelRef::Bank(ch as usize) })
 }
 
 // -- input -------------------------------------------------------------------
@@ -1321,14 +1356,23 @@ impl PyImage {
         Ok(())
     }
 
+    // Same int-or-object handling as Tilemap.blt() above.
     #[pyo3(signature = (x, y, tm, u, v, w, h, colkey=None, rotate=None, scale=None))]
     #[allow(clippy::too_many_arguments)]
-    pub fn bltm(&self, x: f32, y: f32, tm: u32, u: f32, v: f32, w: f32, h: f32,
+    pub fn bltm(&self, x: f32, y: f32, tm: pyo3::Bound<'_, pyo3::PyAny>, u: f32, v: f32, w: f32, h: f32,
             colkey: Option<u8>, rotate: Option<f32>, scale: Option<f32>) -> PyResult<()> {
         unsafe {
-            let src = pyxel_core::tilemaps().get(tm as usize)
-                .cloned()
-                .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("Invalid tilemap index"))?;
+            let src = if let Ok(idx) = tm.extract::<u32>() {
+                pyxel_core::tilemaps().get(idx as usize)
+                    .cloned()
+                    .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("Invalid tilemap index"))?
+            } else if let Ok(pytm) = tm.extract::<pyo3::PyRef<PyTilemap>>() {
+                pytm.rc().clone()
+            } else {
+                return Err(pyo3::exceptions::PyTypeError::new_err(
+                    "tm must be a tilemap bank index (int) or a Tilemap instance"
+                ));
+            };
             let dst = &mut *self.rc().get();
             dst.draw_tilemap(x, y, &src, u, v, w, h, colkey, rotate, scale);
         }
@@ -1542,6 +1586,25 @@ impl PyTilemap {
 
 #[pymethods]
 impl PyTilemap {
+    // Missing entirely until now — pyxel.Tilemap(width, height, img) is
+    // a documented upstream constructor for a standalone tilemap, not
+    // just a bank-indexed pyxel.tilemaps[i]. img can be an image bank
+    // index (int) or an Image instance, matching ImageSource's two
+    // variants.
+    #[new]
+    pub fn new(width: u32, height: u32, img: pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<Self> {
+        let imgsrc = if let Ok(idx) = img.extract::<u32>() {
+            pyxel_core::ImageSource::Index(idx)
+        } else if let Ok(pyimg) = img.extract::<pyo3::PyRef<PyImage>>() {
+            pyxel_core::ImageSource::Image(pyimg.rc().clone())
+        } else {
+            return Err(pyo3::exceptions::PyTypeError::new_err(
+                "img must be an image bank index (int) or an Image instance"
+            ));
+        };
+        Ok(PyTilemap { tilemap: pyxel_core::Tilemap::new(width, height, imgsrc) })
+    }
+
     #[staticmethod]
     pub fn from_tmx(filename: &str, layer: u32) -> PyResult<Self> {
         // Same fix as Image::from_image: Tilemap::load() does NOT resize
@@ -1691,14 +1754,25 @@ impl PyTilemap {
         unsafe { (&*self.rc().get()).collide(x, y, w, h, dx, dy, &walls) }
     }
 
+    // tm can be a bank index (int) or a Tilemap instance — previously
+    // only the index form was supported here, unlike Image.blt() (and
+    // the top-level bltm()/PyImage.bltm(), which already handled both).
     #[pyo3(signature = (x, y, tm, u, v, w, h, tilekey=None, rotate=None, scale=None))]
     #[allow(clippy::too_many_arguments)]
-    pub fn blt(&self, x: f32, y: f32, tm: u32, u: f32, v: f32, w: f32, h: f32,
+    pub fn blt(&self, x: f32, y: f32, tm: pyo3::Bound<'_, pyo3::PyAny>, u: f32, v: f32, w: f32, h: f32,
            tilekey: Option<(u16, u16)>, rotate: Option<f32>, scale: Option<f32>) -> PyResult<()> {
         unsafe {
-            let src = pyxel_core::tilemaps().get(tm as usize)
-                .cloned()
-                .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("Invalid tilemap index"))?;
+            let src = if let Ok(idx) = tm.extract::<u32>() {
+                pyxel_core::tilemaps().get(idx as usize)
+                    .cloned()
+                    .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("Invalid tilemap index"))?
+            } else if let Ok(pytm) = tm.extract::<pyo3::PyRef<PyTilemap>>() {
+                pytm.rc().clone()
+            } else {
+                return Err(pyo3::exceptions::PyTypeError::new_err(
+                    "tm must be a tilemap bank index (int) or a Tilemap instance"
+                ));
+            };
             let dst = &mut *self.rc().get();
             dst.draw_tilemap(x, y, &src, u, v, w, h, tilekey, rotate, scale);
         }
@@ -1766,14 +1840,36 @@ impl PyFont {
 // Channel wrapper (channel_wrapper.rs)
 // ---------------------------------------------------------------------------
 
-#[pyclass(name = "Channel")]
+// Channel needs to support two distinct identities: pyxel.channels[i]
+// (a live view onto one of the real, shared channel banks) and
+// pyxel.Channel() (documented upstream as "Create a new Channel
+// instance" — a genuinely independent, standalone object, unconnected
+// to any bank). Previously PyChannel only ever stored a bank index,
+// and Channel::new() hardcoded bank 0 — meaning EVERY px.Channel()
+// call was secretly a view onto the SAME real bank-0 channel, not an
+// independent object at all. Found via dungeon-antiqua2.pyxapp's
+// Sounds.set_volume(), which builds a list of several px.Channel()
+// instances (each meant to hold its own gain) and hands them to
+// pyxel.channels.from_list() — since every one of those "independent"
+// instances was actually the same shared bank-0 storage, only the
+// LAST one's gain survived, silently discarding the others. Mirrors
+// ImageSource's Index(u32)/Image(RcImage) split in tilemap.rs.
+enum ChannelRef {
+    Bank(usize),
+    Owned(pyxel_core::RcChannel),
+}
+
+#[pyclass(name = "Channel", unsendable)]
 pub struct PyChannel {
-    bank: usize,
+    channel_ref: ChannelRef,
 }
 
 impl PyChannel {
     pub fn rc(&self) -> &pyxel_core::RcChannel {
-        &pyxel_core::channels()[self.bank]
+        match &self.channel_ref {
+            ChannelRef::Bank(i) => &pyxel_core::channels()[*i],
+            ChannelRef::Owned(rc) => rc,
+        }
     }
 }
 
@@ -1781,7 +1877,7 @@ impl PyChannel {
 impl PyChannel {
     #[new]
     pub fn new() -> Self {
-        PyChannel { bank: 0 }
+        PyChannel { channel_ref: ChannelRef::Owned(pyxel_core::Channel::new()) }
     }
 
     #[getter]
@@ -1804,16 +1900,45 @@ impl PyChannel {
         unsafe { (&mut *self.rc().get()).detune = detune; }
     }
 
+    // See the top-level play() function's comment for why snd needs to
+    // accept int/list[int]/Sound/list[Sound]/MML-string, not just a
+    // bare u32 index.
     #[pyo3(signature = (snd, sec=None, r#loop=None, resume=None, tick=None))]
-    pub fn play(&self, snd: u32, sec: Option<f32>, r#loop: Option<bool>, resume: Option<bool>, tick: Option<f32>) -> PyResult<()> {
+    pub fn play(&self, snd: pyo3::Bound<'_, pyo3::PyAny>, sec: Option<f32>, r#loop: Option<bool>, resume: Option<bool>, tick: Option<f32>) -> PyResult<()> {
         unsafe {
             if !PYXEL_READY { return Ok(()); }
-            let sound = pyxel_core::sounds().get(snd as usize)
-                .cloned()
-                .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("Invalid sound index"))?;
-            let ch = &mut *self.rc().get();
+            let should_loop   = r#loop.unwrap_or(false);
+            let should_resume = resume.unwrap_or(false);
             let sec = tick.map(|t| t / 120.0).or(sec);
-            ch.play_sound(sound, sec, r#loop.unwrap_or(false), resume.unwrap_or(false));
+            let channel = &mut *self.rc().get();
+            if let Ok(idx) = snd.extract::<u32>() {
+                let sound = pyxel_core::sounds().get(idx as usize)
+                    .cloned()
+                    .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("Invalid sound index"))?;
+                channel.play_sound(sound, sec, should_loop, should_resume);
+            } else if let Ok(seq) = snd.extract::<Vec<u32>>() {
+                let pyxel_sounds = pyxel_core::sounds();
+                let mut sounds = Vec::with_capacity(seq.len());
+                for idx in seq {
+                    sounds.push(
+                        pyxel_sounds.get(idx as usize).cloned()
+                            .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("Invalid sound index"))?
+                    );
+                }
+                channel.play(sounds, sec, should_loop, should_resume);
+            } else if let Ok(mml) = snd.extract::<String>() {
+                channel.play_mml(&mml, sec, should_loop, should_resume)
+                    .map_err(pyo3::exceptions::PyValueError::new_err)?;
+            } else if let Ok(snd_ref) = snd.extract::<pyo3::PyRef<PySound>>() {
+                channel.play(vec![snd_ref.rc().clone()], sec, should_loop, should_resume);
+            } else if let Ok(snd_refs) = snd.extract::<Vec<pyo3::PyRef<PySound>>>() {
+                let sounds: Vec<_> = snd_refs.iter().map(|s| s.rc().clone()).collect();
+                channel.play(sounds, sec, should_loop, should_resume);
+            } else {
+                return Err(pyo3::exceptions::PyTypeError::new_err(
+                    "snd must be an int, list of ints, Sound, list of Sounds, or MML string"
+                ));
+            }
         }
         Ok(())
     }
@@ -1930,7 +2055,7 @@ impl PyChannelList {
                 format!("channel index {idx} out of range")
             ));
         }
-        Ok(PyChannel { bank: idx })
+        Ok(PyChannel { channel_ref: ChannelRef::Bank(idx) })
     }
 
     pub fn __setitem__(&self, idx: pyo3::Bound<'_, pyo3::PyAny>, val: pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<()> {
@@ -1983,7 +2108,7 @@ impl PyChannelList {
 
     pub fn to_list(&self) -> Vec<PyChannel> {
         (0..pyxel_core::NUM_CHANNELS as usize)
-            .map(|i| PyChannel { bank: i })
+            .map(|i| PyChannel { channel_ref: ChannelRef::Bank(i) })
             .collect()
     }
 }
@@ -1992,14 +2117,26 @@ impl PyChannelList {
 // Tone wrapper (tone_wrapper.rs)
 // ---------------------------------------------------------------------------
 
-#[pyclass(name = "Tone")]
+// Same fix as PyChannel/ChannelRef above, for the same reason: Tone()
+// is documented upstream as "Create a new Tone instance" (a genuinely
+// independent object), but previously always hardcoded bank 0 — every
+// px.Tone() was secretly a view onto the same shared bank-0 tone.
+enum ToneRef {
+    Bank(usize),
+    Owned(pyxel_core::RcTone),
+}
+
+#[pyclass(name = "Tone", unsendable)]
 pub struct PyTone {
-    bank: usize,
+    tone_ref: ToneRef,
 }
 
 impl PyTone {
     pub fn rc(&self) -> &pyxel_core::RcTone {
-        &pyxel_core::tones()[self.bank]
+        match &self.tone_ref {
+            ToneRef::Bank(i) => &pyxel_core::tones()[*i],
+            ToneRef::Owned(rc) => rc,
+        }
     }
 }
 
@@ -2007,7 +2144,7 @@ impl PyTone {
 impl PyTone {
     #[new]
     pub fn new() -> Self {
-        PyTone { bank: 0 }
+        PyTone { tone_ref: ToneRef::Owned(pyxel_core::Tone::new()) }
     }
 
     #[getter]
@@ -2062,7 +2199,7 @@ impl PyToneList {
                 format!("tone bank index {idx} out of range")
             ));
         }
-        Ok(PyTone { bank: idx })
+        Ok(PyTone { tone_ref: ToneRef::Bank(idx) })
     }
 
     pub fn __setitem__(&self, idx: pyo3::Bound<'_, pyo3::PyAny>, val: pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<()> {

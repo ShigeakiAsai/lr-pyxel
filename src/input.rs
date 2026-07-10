@@ -109,6 +109,13 @@ pub unsafe fn reset_all_button_states() {
     MOUSE_ACCUM_X = 0;
     MOUSE_ACCUM_Y = 0;
     px.set_mouse_position(0.0, 0.0);
+    // Mouse visibility (pyxel.mouse(True/False)) isn't reset by
+    // pyxel_core itself on content switch either — a game that shows
+    // its cursor (e.g. LastEmulator.pyxapp) leaves it visible for
+    // whatever runs next, including the launcher (which never calls
+    // pyxel.mouse() at all, since it predates mouse support). Default
+    // to hidden, matching pyxel_core's own initial state.
+    px.set_mouse_visible(false);
 }
 
 /// Translate libretro joypad bitmask to Pyxel key states.

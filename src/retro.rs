@@ -408,6 +408,22 @@ unsafe fn reset_color_palette() {
     }
 }
 
+// Per-bank audio state (gain/detune) isn't reset by pyxel_core itself
+// when switching content, unlike the color palette above — a game that
+// adjusts these (e.g. dungeon-antiqua2.pyxapp's volume settings) would
+// otherwise leak into whatever runs next. Defaults confirmed from
+// pyxel_core's own Channel::new(): gain = DEFAULT_CHANNEL_GAIN (0.125),
+// detune = 0.
+unsafe fn reset_channel_gains() {
+    if PYXEL_READY {
+        for ch in pyxel_core::channels().iter() {
+            let channel = &mut *ch.get();
+            channel.gain = pyxel_core::DEFAULT_CHANNEL_GAIN;
+            channel.detune = 0;
+        }
+    }
+}
+
 // Show a short on-screen notification via RetroArch's own OSD message
 // system (RETRO_ENVIRONMENT_SET_MESSAGE = 12), instead of building a
 // custom in-Pyxel error screen. Used when a script fails to load (e.g.
@@ -655,6 +671,7 @@ pub unsafe extern "C" fn retro_load_game(game: *const c_void) -> bool {
         input::PREV_BUTTONS = 0;
         input::reset_all_button_states();
         reset_color_palette();
+        reset_channel_gains();
         // Stop audio from previous content
         if PYXEL_READY {
             pyxel_core::pyxel().stop_all_channels();
@@ -750,6 +767,7 @@ pub unsafe extern "C" fn retro_load_game(game: *const c_void) -> bool {
         input::PREV_BUTTONS = 0;
         input::reset_all_button_states();
         reset_color_palette();
+        reset_channel_gains();
 
         // Clear cached modules from previous game to prevent import conflicts.
         // Without this, modules like 'constants' from game A would be reused
@@ -1027,6 +1045,7 @@ unsafe fn launch_frontend() {
     input::PREV_BUTTONS = 0;
     input::reset_all_button_states();
     reset_color_palette();
+    reset_channel_gains();
     if PYXEL_READY {
         pyxel_core::pyxel().stop_all_channels();
     }
@@ -1085,6 +1104,7 @@ unsafe fn load_game_from_path(path: &str) {
     input::PREV_BUTTONS = 0;
     input::reset_all_button_states();
     reset_color_palette();
+    reset_channel_gains();
     // Note: SPLASH_COUNT is NOT reset here; splash only shows on core-less boot
 
     // Stop audio
