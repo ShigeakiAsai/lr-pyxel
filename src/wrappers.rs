@@ -104,41 +104,69 @@ pub fn bltm(x: f32, y: f32, tm: pyo3::Bound<'_, pyo3::PyAny>, u: f32, v: f32, w:
 }
 
 // blt3d(x, y, w, h, img, pos, rot, fov=None, colkey=None)
+// img can be a bank index (int) or an Image instance — previously only
+// the index form was supported here, unlike the 2D blt(), which
+// already handled both; confirmed via upstream's own test suite
+// (test_blt3d_with_image_instance) that this is a real, documented gap
+// rather than an intentional 3D-only restriction.
 #[pyfunction]
 #[pyo3(signature = (x, y, w, h, img, pos, rot, fov=None, colkey=None))]
 #[allow(clippy::too_many_arguments)]
 pub fn blt3d(
     x: f32, y: f32, w: f32, h: f32,
-    img: u32,
+    img: pyo3::Bound<'_, pyo3::PyAny>,
     pos: (f32, f32, f32),
     rot: (f32, f32, f32),
     fov: Option<f32>,
     colkey: Option<u8>,
-) {
+) -> PyResult<()> {
     unsafe {
-        if PYXEL_READY {
-            pyxel_core::pyxel().draw_image_3d(x, y, w, h, img, pos, rot, fov, colkey);
+        if !PYXEL_READY { return Ok(()); }
+        if let Ok(idx) = img.extract::<u32>() {
+            pyxel_core::pyxel().draw_image_3d(x, y, w, h, idx, pos, rot, fov, colkey);
+        } else if let Ok(pyimg) = img.extract::<pyo3::PyRef<PyImage>>() {
+            let src = pyimg.rc().clone();
+            let screen = pyxel_core::screen();
+            let dst = &mut *screen.get();
+            dst.draw_image_3d(x, y, w, h, &src, pos, rot, fov, colkey);
+        } else {
+            return Err(pyo3::exceptions::PyTypeError::new_err(
+                "img must be an image bank index (int) or an Image instance"
+            ));
         }
     }
+    Ok(())
 }
 
 // bltm3d(x, y, w, h, tm, pos, rot, fov=None, colkey=None)
+// Same int-or-object handling as blt3d() above.
 #[pyfunction]
 #[pyo3(signature = (x, y, w, h, tm, pos, rot, fov=None, colkey=None))]
 #[allow(clippy::too_many_arguments)]
 pub fn bltm3d(
     x: f32, y: f32, w: f32, h: f32,
-    tm: u32,
+    tm: pyo3::Bound<'_, pyo3::PyAny>,
     pos: (f32, f32, f32),
     rot: (f32, f32, f32),
     fov: Option<f32>,
     colkey: Option<u8>,
-) {
+) -> PyResult<()> {
     unsafe {
-        if PYXEL_READY {
-            pyxel_core::pyxel().draw_tilemap_3d(x, y, w, h, tm, pos, rot, fov, colkey);
+        if !PYXEL_READY { return Ok(()); }
+        if let Ok(idx) = tm.extract::<u32>() {
+            pyxel_core::pyxel().draw_tilemap_3d(x, y, w, h, idx, pos, rot, fov, colkey);
+        } else if let Ok(pytm) = tm.extract::<pyo3::PyRef<PyTilemap>>() {
+            let src = pytm.rc().clone();
+            let screen = pyxel_core::screen();
+            let dst = &mut *screen.get();
+            dst.draw_tilemap_3d(x, y, w, h, &src, pos, rot, fov, colkey);
+        } else {
+            return Err(pyo3::exceptions::PyTypeError::new_err(
+                "tm must be a tilemap bank index (int) or a Tilemap instance"
+            ));
         }
     }
+    Ok(())
 }
 
 // Deprecated: pyxel.image(n) → use pyxel.images[n] instead
@@ -1119,12 +1147,39 @@ pub fn resize(width: u32, height: u32) -> PyResult<()> {
     unsafe {
         GAME_W = width;
         GAME_H = height;
+        // Actually resize the physical canvas — previously this only
+        // updated our own GAME_W/GAME_H tracking and RetroArch's
+        // reported geometry, leaving the real screen canvas at
+        // whatever size it was before. Same class of bug as init()'s
+        // missing set_screen_size() call (v0.11.3), just in a
+        // different function we hadn't touched with that fix. Any
+        // script calling pyxel.resize() at runtime would have its
+        // rendering silently truncated to the old size.
+        if PYXEL_READY {
+            pyxel_core::pyxel().set_screen_size(width, height);
+        }
+        // pyxel.width/height are frozen as static module attributes by
+        // init() (see there for why) — once set, a static attribute
+        // takes precedence over __getattr__ permanently, so without
+        // this, pyxel.width/height would report the size at launch
+        // forever, never reflecting a runtime resize() call, even
+        // though pyxel_core's own width()/height() (and everything
+        // reading them internally) update correctly.
+        Python::with_gil(|py| {
+            if let Ok(m) = py.import_bound("pyxel") {
+                let _ = m.setattr("width",  width);
+                let _ = m.setattr("height", height);
+            }
+        });
         if let Some(env) = ENVIRON_CB {
             let geometry = rust_libretro_sys::retro_game_geometry {
                 base_width:   width,
                 base_height:  height,
-                max_width:    256,
-                max_height:   256,
+                // Was hardcoded to 256, stale since v0.11.3 raised the
+                // actual ceiling (SCREEN_W/SCREEN_H and every other
+                // max_width/max_height site) to 1024.
+                max_width:    1024,
+                max_height:   1024,
                 aspect_ratio: width as f32 / height as f32,
             };
             env(37, &geometry as *const _ as *mut c_void);
@@ -1632,29 +1687,49 @@ impl PyTilemap {
         unsafe { (&*self.rc().get()).height() }
     }
 
+    // imgsrc can be read/written as either a bank index (int) or an
+    // Image instance — previously only the int form worked in either
+    // direction. Confirmed via upstream's own tests (test_imgsrc_read_write_image,
+    // test_tilemap_wrong_imgsrc_type) that this bidirectional support
+    // is expected, not an int-only design.
     #[getter]
-    pub fn imgsrc(&self) -> u32 {
+    pub fn imgsrc(&self, py: pyo3::Python) -> pyo3::PyObject {
+        use pyo3::IntoPy;
         unsafe {
             match &(&*self.rc().get()).imgsrc {
-                pyxel_core::ImageSource::Index(i) => *i,
-                _ => 0,
+                pyxel_core::ImageSource::Index(i) => (*i).into_py(py),
+                pyxel_core::ImageSource::Image(rc) => {
+                    pyo3::Py::new(py, PyImage { image: rc.clone() })
+                        .map(|obj| obj.into_py(py))
+                        .unwrap_or_else(|_| py.None())
+                }
             }
         }
     }
 
     #[setter]
-    pub fn set_imgsrc(&self, idx: u32) {
+    pub fn set_imgsrc(&self, img: pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<()> {
         unsafe {
-            (&mut *self.rc().get()).imgsrc = pyxel_core::ImageSource::Index(idx);
+            let imgsrc = if let Ok(idx) = img.extract::<u32>() {
+                pyxel_core::ImageSource::Index(idx)
+            } else if let Ok(pyimg) = img.extract::<pyo3::PyRef<PyImage>>() {
+                pyxel_core::ImageSource::Image(pyimg.rc().clone())
+            } else {
+                return Err(pyo3::exceptions::PyTypeError::new_err(
+                    "imgsrc must be an image bank index (int) or an Image instance"
+                ));
+            };
+            (&mut *self.rc().get()).imgsrc = imgsrc;
         }
+        Ok(())
     }
 
     // Deprecated: refimg
     #[getter]
-    pub fn refimg(&self) -> u32 { self.imgsrc() }
+    pub fn refimg(&self, py: pyo3::Python) -> pyo3::PyObject { self.imgsrc(py) }
 
     #[setter]
-    pub fn set_refimg(&self, idx: u32) { self.set_imgsrc(idx); }
+    pub fn set_refimg(&self, img: pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<()> { self.set_imgsrc(img) }
 
     pub fn set(&self, x: i32, y: i32, data: Vec<String>) {
         unsafe {
