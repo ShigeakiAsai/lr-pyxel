@@ -5,6 +5,29 @@ use pyo3::prelude::*;
 use crate::*;
 
 // ---------------------------------------------------------------------------
+// Deprecation warnings
+// ---------------------------------------------------------------------------
+// Upstream Pyxel prints a message containing "deprecated" to stdout the
+// FIRST time a deprecated API is used, and never again for that same
+// item in the same process (upstream's own tests rely on exactly this:
+// "warning fires only once per session, so test both APIs in order").
+// Tracked as a plain global HashSet of string keys, one entry per
+// distinct deprecated item — not reset on content switch, since
+// upstream's "session" scope is the whole process lifetime, not a
+// single script run.
+static mut WARNED_DEPRECATIONS: Option<std::collections::HashSet<&'static str>> = None;
+
+fn warn_deprecated_once(key: &'static str, message: &str) {
+    unsafe {
+        let ptr = std::ptr::addr_of_mut!(WARNED_DEPRECATIONS);
+        let set = (*ptr).get_or_insert_with(std::collections::HashSet::new);
+        if set.insert(key) {
+            println!("Warning: {message} is deprecated");
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Pyxel Python module — v0.4.0 minimal set
 // ---------------------------------------------------------------------------
 
@@ -172,6 +195,7 @@ pub fn bltm3d(
 // Deprecated: pyxel.image(n) → use pyxel.images[n] instead
 #[pyfunction]
 pub fn image(img: u32) -> PyResult<PyImage> {
+    warn_deprecated_once("image()", "pyxel.image() (use pyxel.images[n] instead)");
     if img as usize >= pyxel_core::NUM_IMAGES as usize {
         return Err(pyo3::exceptions::PyValueError::new_err("Invalid image index"));
     }
@@ -182,6 +206,7 @@ pub fn image(img: u32) -> PyResult<PyImage> {
 #[pyfunction]
 #[pyo3(name = "tilemap")]
 pub fn tilemap_fn(tm: u32) -> PyResult<PyTilemap> {
+    warn_deprecated_once("tilemap()", "pyxel.tilemap() (use pyxel.tilemaps[n] instead)");
     if tm as usize >= pyxel_core::NUM_TILEMAPS as usize {
         return Err(pyo3::exceptions::PyValueError::new_err("Invalid tilemap index"));
     }
@@ -255,6 +280,9 @@ pub fn load(
 ) -> PyResult<()> {
     unsafe {
         if !PYXEL_READY { return Ok(()); }
+        if excl_images.is_some() || excl_tilemaps.is_some() || excl_sounds.is_some() || excl_musics.is_some() {
+            warn_deprecated_once("load.excl_*", "excl_* arguments (use exclude_* instead)");
+        }
         let ei = excl_images.or(exclude_images);
         let et = excl_tilemaps.or(exclude_tilemaps);
         let es = excl_sounds.or(exclude_sounds);
@@ -281,6 +309,9 @@ pub fn save(
 ) -> PyResult<()> {
     unsafe {
         if !PYXEL_READY { return Ok(()); }
+        if excl_images.is_some() || excl_tilemaps.is_some() || excl_sounds.is_some() || excl_musics.is_some() {
+            warn_deprecated_once("save.excl_*", "excl_* arguments (use exclude_* instead)");
+        }
         let ei = excl_images.or(exclude_images);
         let et = excl_tilemaps.or(exclude_tilemaps);
         let es = excl_sounds.or(exclude_sounds);
@@ -452,6 +483,9 @@ pub fn play(ch: u32, snd: pyo3::Bound<'_, pyo3::PyAny>, sec: Option<f32>, r#loop
         if !PYXEL_READY { return Ok(()); }
         let should_loop   = r#loop.unwrap_or(false);
         let should_resume = resume.unwrap_or(false);
+        if tick.is_some() {
+            warn_deprecated_once("play.tick", "play()'s tick argument (use sec instead)");
+        }
         let sec = tick.map(|t| t / 120.0).or(sec);
         if let Ok(idx) = snd.extract::<u32>() {
             pyxel_core::pyxel().play_sound(ch, idx, sec, should_loop, should_resume);
@@ -488,6 +522,9 @@ pub fn play(ch: u32, snd: pyo3::Bound<'_, pyo3::PyAny>, sec: Option<f32>, r#loop
 pub fn playm(msc: u32, sec: Option<f32>, r#loop: Option<bool>, tick: Option<f32>) {
     unsafe {
         if PYXEL_READY {
+            if tick.is_some() {
+                warn_deprecated_once("playm.tick", "playm()'s tick argument (use sec instead)");
+            }
             let sec = tick.map(|t| t / 120.0).or(sec);
             pyxel_core::pyxel().play_music(msc, sec, r#loop.unwrap_or(false));
         }
@@ -534,6 +571,7 @@ pub fn play_pos(ch: u32) -> Option<(u32, f32)> {
 #[pyfunction]
 #[pyo3(name = "sound")]
 pub fn sound_fn(snd: u32) -> PyResult<PySound> {
+    warn_deprecated_once("sound()", "pyxel.sound() (use pyxel.sounds[n] instead)");
     if snd as usize >= pyxel_core::NUM_SOUNDS as usize {
         return Err(pyo3::exceptions::PyValueError::new_err("Invalid sound index"));
     }
@@ -544,6 +582,7 @@ pub fn sound_fn(snd: u32) -> PyResult<PySound> {
 #[pyfunction]
 #[pyo3(name = "music")]
 pub fn music_fn(msc: u32) -> PyResult<PyMusic> {
+    warn_deprecated_once("music()", "pyxel.music() (use pyxel.musics[n] instead)");
     if msc as usize >= pyxel_core::NUM_MUSICS as usize {
         return Err(pyo3::exceptions::PyValueError::new_err("Invalid music index"));
     }
@@ -554,6 +593,7 @@ pub fn music_fn(msc: u32) -> PyResult<PyMusic> {
 #[pyfunction]
 #[pyo3(name = "channel")]
 pub fn channel_fn(ch: u32) -> PyResult<PyChannel> {
+    warn_deprecated_once("channel()", "pyxel.channel() (use pyxel.channels[n] instead)");
     if ch as usize >= pyxel_core::NUM_CHANNELS as usize {
         return Err(pyo3::exceptions::PyValueError::new_err("Invalid channel index"));
     }
@@ -1223,8 +1263,13 @@ impl PyImage {
     }
 
     #[staticmethod]
-    #[pyo3(signature = (filename, include_colors=None))]
-    pub fn from_image(filename: &str, include_colors: Option<bool>) -> PyResult<Self> {
+    #[pyo3(signature = (filename, include_colors=None, incl_colors=None))]
+    pub fn from_image(filename: &str, include_colors: Option<bool>, incl_colors: Option<bool>) -> PyResult<Self> {
+        // incl_colors is the deprecated alias for include_colors.
+        if incl_colors.is_some() {
+            warn_deprecated_once("Image.from_image.incl_colors", "incl_colors (use include_colors instead)");
+        }
+        let include_colors = include_colors.or(incl_colors);
         // pyxel_core::Image::load() does NOT resize its target canvas — it
         // just blits the loaded file into the existing (fixed-size) canvas,
         // clipped to its bounds. pyxel_core::Image::from_image() is the
@@ -1277,8 +1322,12 @@ impl PyImage {
         }
     }
 
-    #[pyo3(signature = (x, y, filename, include_colors=None))]
-    pub fn load(&self, x: i32, y: i32, filename: &str, include_colors: Option<bool>) -> PyResult<()> {
+    #[pyo3(signature = (x, y, filename, include_colors=None, incl_colors=None))]
+    pub fn load(&self, x: i32, y: i32, filename: &str, include_colors: Option<bool>, incl_colors: Option<bool>) -> PyResult<()> {
+        if incl_colors.is_some() {
+            warn_deprecated_once("Image.load.incl_colors", "incl_colors (use include_colors instead)");
+        }
+        let include_colors = include_colors.or(incl_colors);
         unsafe {
             let img = &mut *self.rc().get();
             img.load(x, y, filename, include_colors)
@@ -1692,6 +1741,16 @@ impl PySound {
         }
     }
 
+    // Deprecated: old_mml (legacy MML dialect, predates the current
+    // mml() syntax)
+    pub fn old_mml(&self, code: &str) -> PyResult<()> {
+        warn_deprecated_once("Sound.old_mml", "Sound.old_mml() (use Sound.mml() instead)");
+        unsafe {
+            (&mut *self.rc().get()).old_mml(code)
+                .map_err(pyo3::exceptions::PyException::new_err)
+        }
+    }
+
     #[pyo3(signature = (filename=None))]
     pub fn pcm(&self, filename: Option<&str>) -> PyResult<()> {
         unsafe {
@@ -1909,12 +1968,31 @@ impl PyTilemap {
         Ok(())
     }
 
-    // Deprecated: refimg
+    // Deprecated: refimg (alias for imgsrc)
     #[getter]
-    pub fn refimg(&self, py: pyo3::Python) -> pyo3::PyObject { self.imgsrc(py) }
+    pub fn refimg(&self, py: pyo3::Python) -> pyo3::PyObject {
+        warn_deprecated_once("Tilemap.refimg", "Tilemap.refimg (use Tilemap.imgsrc instead)");
+        self.imgsrc(py)
+    }
 
     #[setter]
-    pub fn set_refimg(&self, img: pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<()> { self.set_imgsrc(img) }
+    pub fn set_refimg(&self, img: pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<()> {
+        warn_deprecated_once("Tilemap.refimg", "Tilemap.refimg (use Tilemap.imgsrc instead)");
+        self.set_imgsrc(img)
+    }
+
+    // Deprecated: image (also an alias for imgsrc)
+    #[getter]
+    pub fn image(&self, py: pyo3::Python) -> pyo3::PyObject {
+        warn_deprecated_once("Tilemap.image", "Tilemap.image (use Tilemap.imgsrc instead)");
+        self.imgsrc(py)
+    }
+
+    #[setter]
+    pub fn set_image(&self, img: pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<()> {
+        warn_deprecated_once("Tilemap.image", "Tilemap.image (use Tilemap.imgsrc instead)");
+        self.set_imgsrc(img)
+    }
 
     pub fn set(&self, x: i32, y: i32, data: Vec<String>) {
         unsafe {
@@ -2241,6 +2319,9 @@ impl PyChannel {
             if !PYXEL_READY { return Ok(()); }
             let should_loop   = r#loop.unwrap_or(false);
             let should_resume = resume.unwrap_or(false);
+            if tick.is_some() {
+                warn_deprecated_once("Channel.play.tick", "Channel.play()'s tick argument (use sec instead)");
+            }
             let sec = tick.map(|t| t / 120.0).or(sec);
             let channel = &mut *self.rc().get();
             if let Ok(idx) = snd.extract::<u32>() {
@@ -2673,6 +2754,32 @@ impl PyTone {
     pub fn set_wavetable(&self, wavetable: Vec<pyxel_core::ToneSample>) {
         unsafe { (&mut *self.rc().get()).wavetable = wavetable; }
     }
+
+    // Deprecated: waveform (alias for wavetable)
+    #[getter]
+    pub fn waveform(&self) -> Vec<pyxel_core::ToneSample> {
+        warn_deprecated_once("Tone.waveform", "Tone.waveform (use Tone.wavetable instead)");
+        self.wavetable()
+    }
+
+    #[setter]
+    pub fn set_waveform(&self, waveform: Vec<pyxel_core::ToneSample>) {
+        warn_deprecated_once("Tone.waveform", "Tone.waveform (use Tone.wavetable instead)");
+        self.set_wavetable(waveform);
+    }
+
+    // Deprecated: noise (alias for mode)
+    #[getter]
+    pub fn noise(&self) -> u32 {
+        warn_deprecated_once("Tone.noise", "Tone.noise (use Tone.mode instead)");
+        self.mode()
+    }
+
+    #[setter]
+    pub fn set_noise(&self, mode: u32) {
+        warn_deprecated_once("Tone.noise", "Tone.noise (use Tone.mode instead)");
+        self.set_mode(mode);
+    }
 }
 
 #[pyclass(name = "ToneList")]
@@ -2864,6 +2971,13 @@ impl PyMusic {
     #[setter]
     pub fn set_seqs(&self, seqs: Vec<Vec<u32>>) {
         unsafe { (&mut *self.rc().get()).set(&seqs); }
+    }
+
+    // Deprecated: snds_list (alias for seqs, getter only)
+    #[getter]
+    pub fn snds_list(&self) -> Vec<Vec<u32>> {
+        warn_deprecated_once("Music.snds_list", "Music.snds_list (use Music.seqs instead)");
+        self.seqs()
     }
 
     // set(seq0, seq1, ...) — each arg is a list of sound indices for that channel
