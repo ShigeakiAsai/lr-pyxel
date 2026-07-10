@@ -537,7 +537,7 @@ pub fn sound_fn(snd: u32) -> PyResult<PySound> {
     if snd as usize >= pyxel_core::NUM_SOUNDS as usize {
         return Err(pyo3::exceptions::PyValueError::new_err("Invalid sound index"));
     }
-    Ok(PySound { bank: snd as usize })
+    Ok(PySound { sound_ref: SoundRef::Bank(snd as usize) })
 }
 
 // Deprecated: pyxel.music(n) → use pyxel.musics[n]
@@ -547,7 +547,7 @@ pub fn music_fn(msc: u32) -> PyResult<PyMusic> {
     if msc as usize >= pyxel_core::NUM_MUSICS as usize {
         return Err(pyo3::exceptions::PyValueError::new_err("Invalid music index"));
     }
-    Ok(PyMusic { bank: msc as usize })
+    Ok(PyMusic { music_ref: MusicRef::Bank(msc as usize) })
 }
 
 // Deprecated: pyxel.channel(n) → use pyxel.channels[n]
@@ -1445,17 +1445,27 @@ pub struct PyImageList;
 
 #[pymethods]
 impl PyImageList {
-    pub fn __getitem__(&self, idx: usize) -> PyResult<PyImage> {
-        if idx >= pyxel_core::NUM_IMAGES as usize {
+    pub fn __len__(&self) -> usize {
+        pyxel_core::images().len()
+    }
+
+    pub fn __getitem__(&self, idx: i64) -> PyResult<PyImage> {
+        let images = pyxel_core::images();
+        let len = images.len() as i64;
+        let i = if idx < 0 { idx + len } else { idx };
+        if i < 0 || i >= len {
             return Err(pyo3::exceptions::PyIndexError::new_err(
                 format!("image bank index {idx} out of range")
             ));
         }
-        Ok(PyImage { image: pyxel_core::images()[idx].clone() })
+        Ok(PyImage { image: images[i as usize].clone() })
     }
 
-    pub fn __setitem__(&self, idx: usize, val: pyo3::PyRef<PyImage>) -> PyResult<()> {
-        if idx >= pyxel_core::NUM_IMAGES as usize {
+    pub fn __setitem__(&self, idx: i64, val: pyo3::PyRef<PyImage>) -> PyResult<()> {
+        let images = pyxel_core::images();
+        let len = images.len() as i64;
+        let i = if idx < 0 { idx + len } else { idx };
+        if i < 0 || i >= len {
             return Err(pyo3::exceptions::PyIndexError::new_err(
                 format!("image bank index {idx} out of range")
             ));
@@ -1466,8 +1476,77 @@ impl PyImageList {
         // silently clipped anything wider/taller than the bank's current
         // size (e.g. loading a >256px-wide tileset PNG into image bank 0
         // would truncate everything past x=256/y=256).
-        pyxel_core::images()[idx] = val.rc().clone();
+        pyxel_core::images()[i as usize] = val.rc().clone();
         Ok(())
+    }
+
+    pub fn __delitem__(&self, idx: i64) -> PyResult<()> {
+        let images = pyxel_core::images();
+        let len = images.len() as i64;
+        let i = if idx < 0 { idx + len } else { idx };
+        if i < 0 || i >= len {
+            return Err(pyo3::exceptions::PyIndexError::new_err("image index out of range"));
+        }
+        images.remove(i as usize);
+        Ok(())
+    }
+
+    pub fn __repr__(&self) -> String {
+        format!("[Image; {}]", pyxel_core::images().len())
+    }
+
+    pub fn __bool__(&self) -> bool {
+        !pyxel_core::images().is_empty()
+    }
+
+    pub fn __reversed__(&self) -> Vec<PyImage> {
+        pyxel_core::images().iter().rev()
+            .map(|rc| PyImage { image: rc.clone() })
+            .collect()
+    }
+
+    // Unlike Channel/Tone's append()/insert() (which copy values into a
+    // fresh bank slot), Image banks are swappable resources — append()/
+    // insert() push the given Image's own Rc directly, same as
+    // __setitem__ above. No default size exists to fall back on, so
+    // (unlike Channel()/Tone()) an Image argument is required here.
+    pub fn append(&self, image: pyo3::PyRef<PyImage>) {
+        pyxel_core::images().push(image.rc().clone());
+    }
+
+    pub fn insert(&self, idx: usize, image: pyo3::PyRef<PyImage>) {
+        let images = pyxel_core::images();
+        let idx = idx.min(images.len());
+        images.insert(idx, image.rc().clone());
+    }
+
+    pub fn extend(&self, items: Vec<pyo3::PyRef<PyImage>>) {
+        for img in &items {
+            pyxel_core::images().push(img.rc().clone());
+        }
+    }
+
+    pub fn __iadd__(&self, items: Vec<pyo3::PyRef<PyImage>>) {
+        self.extend(items);
+    }
+
+    #[pyo3(signature = (idx=None))]
+    pub fn pop(&self, idx: Option<i64>) -> PyResult<PyImage> {
+        let images = pyxel_core::images();
+        let len = images.len() as i64;
+        if len == 0 {
+            return Err(pyo3::exceptions::PyIndexError::new_err("pop from empty images list"));
+        }
+        let i = idx.unwrap_or(-1);
+        let i = if i < 0 { i + len } else { i };
+        if i < 0 || i >= len {
+            return Err(pyo3::exceptions::PyIndexError::new_err("pop index out of range"));
+        }
+        Ok(PyImage { image: images.remove(i as usize) })
+    }
+
+    pub fn clear(&self) {
+        pyxel_core::images().clear();
     }
 }
 
@@ -1479,14 +1558,29 @@ impl PyImageList {
 // Sound wrapper (sound_wrapper.rs)
 // ---------------------------------------------------------------------------
 
-#[pyclass(name = "Sound")]
+// Same Bank/Owned split as ChannelRef/ToneRef — needed so that
+// PySoundList.pop() can return a detached, standalone Sound (no longer
+// tied to any bank position). The #[new] standalone constructor
+// (pyxel.Sound()) itself is a separate, not-yet-done item (upstream
+// documents it but it's still missing here) — this enum groundwork
+// just makes pop() implementable now; adding #[new] later is a small
+// follow-up once this exists.
+enum SoundRef {
+    Bank(usize),
+    Owned(pyxel_core::RcSound),
+}
+
+#[pyclass(name = "Sound", unsendable)]
 pub struct PySound {
-    bank: usize,
+    sound_ref: SoundRef,
 }
 
 impl PySound {
     pub fn rc(&self) -> &pyxel_core::RcSound {
-        &pyxel_core::sounds()[self.bank]
+        match &self.sound_ref {
+            SoundRef::Bank(i) => &pyxel_core::sounds()[*i],
+            SoundRef::Owned(rc) => rc,
+        }
     }
 }
 
@@ -1497,7 +1591,7 @@ impl PySound {
         unsafe { (&*self.rc().get()).notes.clone() }
     }
 
-    #[setter]
+    #[setter(notes)]
     pub fn set_notes_list(&self, notes: Vec<pyxel_core::SoundNote>) {
         unsafe { (&mut *self.rc().get()).notes = notes; }
     }
@@ -1507,7 +1601,7 @@ impl PySound {
         unsafe { (&*self.rc().get()).tones.clone() }
     }
 
-    #[setter]
+    #[setter(tones)]
     pub fn set_tones_list(&self, tones: Vec<pyxel_core::SoundTone>) {
         unsafe { (&mut *self.rc().get()).tones = tones; }
     }
@@ -1517,7 +1611,7 @@ impl PySound {
         unsafe { (&*self.rc().get()).volumes.clone() }
     }
 
-    #[setter]
+    #[setter(volumes)]
     pub fn set_volumes_list(&self, volumes: Vec<pyxel_core::SoundVolume>) {
         unsafe { (&mut *self.rc().get()).volumes = volumes; }
     }
@@ -1527,7 +1621,7 @@ impl PySound {
         unsafe { (&*self.rc().get()).effects.clone() }
     }
 
-    #[setter]
+    #[setter(effects)]
     pub fn set_effects_list(&self, effects: Vec<pyxel_core::SoundEffect>) {
         unsafe { (&mut *self.rc().get()).effects = effects; }
     }
@@ -1610,13 +1704,95 @@ pub struct PySoundList;
 
 #[pymethods]
 impl PySoundList {
-    pub fn __getitem__(&self, idx: usize) -> PyResult<PySound> {
-        if idx >= pyxel_core::NUM_SOUNDS as usize {
+    pub fn __len__(&self) -> usize {
+        pyxel_core::sounds().len()
+    }
+
+    pub fn __getitem__(&self, idx: i64) -> PyResult<PySound> {
+        let len = pyxel_core::sounds().len() as i64;
+        let i = if idx < 0 { idx + len } else { idx };
+        if i < 0 || i >= len {
             return Err(pyo3::exceptions::PyIndexError::new_err(
                 format!("sound bank index {idx} out of range")
             ));
         }
-        Ok(PySound { bank: idx })
+        Ok(PySound { sound_ref: SoundRef::Bank(i as usize) })
+    }
+
+    pub fn __setitem__(&self, idx: i64, val: pyo3::PyRef<PySound>) -> PyResult<()> {
+        let len = pyxel_core::sounds().len() as i64;
+        let i = if idx < 0 { idx + len } else { idx };
+        if i < 0 || i >= len {
+            return Err(pyo3::exceptions::PyIndexError::new_err(
+                format!("sound bank index {idx} out of range")
+            ));
+        }
+        pyxel_core::sounds()[i as usize] = val.rc().clone();
+        Ok(())
+    }
+
+    pub fn __delitem__(&self, idx: i64) -> PyResult<()> {
+        let sounds = pyxel_core::sounds();
+        let len = sounds.len() as i64;
+        let i = if idx < 0 { idx + len } else { idx };
+        if i < 0 || i >= len {
+            return Err(pyo3::exceptions::PyIndexError::new_err("sound index out of range"));
+        }
+        sounds.remove(i as usize);
+        Ok(())
+    }
+
+    pub fn __repr__(&self) -> String {
+        format!("[Sound; {}]", pyxel_core::sounds().len())
+    }
+
+    pub fn __bool__(&self) -> bool {
+        !pyxel_core::sounds().is_empty()
+    }
+
+    pub fn __reversed__(&self) -> Vec<PySound> {
+        pyxel_core::sounds().iter().rev()
+            .map(|rc| PySound { sound_ref: SoundRef::Owned(rc.clone()) })
+            .collect()
+    }
+
+    pub fn append(&self, sound: pyo3::PyRef<PySound>) {
+        pyxel_core::sounds().push(sound.rc().clone());
+    }
+
+    pub fn insert(&self, idx: usize, sound: pyo3::PyRef<PySound>) {
+        let sounds = pyxel_core::sounds();
+        let idx = idx.min(sounds.len());
+        sounds.insert(idx, sound.rc().clone());
+    }
+
+    pub fn extend(&self, items: Vec<pyo3::PyRef<PySound>>) {
+        for s in &items {
+            pyxel_core::sounds().push(s.rc().clone());
+        }
+    }
+
+    pub fn __iadd__(&self, items: Vec<pyo3::PyRef<PySound>>) {
+        self.extend(items);
+    }
+
+    #[pyo3(signature = (idx=None))]
+    pub fn pop(&self, idx: Option<i64>) -> PyResult<PySound> {
+        let sounds = pyxel_core::sounds();
+        let len = sounds.len() as i64;
+        if len == 0 {
+            return Err(pyo3::exceptions::PyIndexError::new_err("pop from empty sounds list"));
+        }
+        let i = idx.unwrap_or(-1);
+        let i = if i < 0 { i + len } else { i };
+        if i < 0 || i >= len {
+            return Err(pyo3::exceptions::PyIndexError::new_err("pop index out of range"));
+        }
+        Ok(PySound { sound_ref: SoundRef::Owned(sounds.remove(i as usize)) })
+    }
+
+    pub fn clear(&self) {
+        pyxel_core::sounds().clear();
     }
 }
 
@@ -1860,17 +2036,25 @@ pub struct PyTilemapList;
 
 #[pymethods]
 impl PyTilemapList {
-    pub fn __getitem__(&self, idx: usize) -> PyResult<PyTilemap> {
-        if idx >= pyxel_core::NUM_TILEMAPS as usize {
+    pub fn __len__(&self) -> usize {
+        pyxel_core::tilemaps().len()
+    }
+
+    pub fn __getitem__(&self, idx: i64) -> PyResult<PyTilemap> {
+        let len = pyxel_core::tilemaps().len() as i64;
+        let i = if idx < 0 { idx + len } else { idx };
+        if i < 0 || i >= len {
             return Err(pyo3::exceptions::PyIndexError::new_err(
                 format!("tilemap bank index {idx} out of range")
             ));
         }
-        Ok(PyTilemap { tilemap: pyxel_core::tilemaps()[idx].clone() })
+        Ok(PyTilemap { tilemap: pyxel_core::tilemaps()[i as usize].clone() })
     }
 
-    pub fn __setitem__(&self, idx: usize, val: pyo3::PyRef<PyTilemap>) -> PyResult<()> {
-        if idx >= pyxel_core::NUM_TILEMAPS as usize {
+    pub fn __setitem__(&self, idx: i64, val: pyo3::PyRef<PyTilemap>) -> PyResult<()> {
+        let len = pyxel_core::tilemaps().len() as i64;
+        let i = if idx < 0 { idx + len } else { idx };
+        if i < 0 || i >= len {
             return Err(pyo3::exceptions::PyIndexError::new_err(
                 format!("tilemap bank index {idx} out of range")
             ));
@@ -1878,8 +2062,72 @@ impl PyTilemapList {
         // Same fix as ImageList::__setitem__: replace the bank outright
         // instead of copying tiles into the existing fixed-size canvas,
         // which silently truncated maps larger than the current bank size.
-        pyxel_core::tilemaps()[idx] = val.rc().clone();
+        pyxel_core::tilemaps()[i as usize] = val.rc().clone();
         Ok(())
+    }
+
+    pub fn __delitem__(&self, idx: i64) -> PyResult<()> {
+        let tilemaps = pyxel_core::tilemaps();
+        let len = tilemaps.len() as i64;
+        let i = if idx < 0 { idx + len } else { idx };
+        if i < 0 || i >= len {
+            return Err(pyo3::exceptions::PyIndexError::new_err("tilemap index out of range"));
+        }
+        tilemaps.remove(i as usize);
+        Ok(())
+    }
+
+    pub fn __repr__(&self) -> String {
+        format!("[Tilemap; {}]", pyxel_core::tilemaps().len())
+    }
+
+    pub fn __bool__(&self) -> bool {
+        !pyxel_core::tilemaps().is_empty()
+    }
+
+    pub fn __reversed__(&self) -> Vec<PyTilemap> {
+        pyxel_core::tilemaps().iter().rev()
+            .map(|rc| PyTilemap { tilemap: rc.clone() })
+            .collect()
+    }
+
+    pub fn append(&self, tilemap: pyo3::PyRef<PyTilemap>) {
+        pyxel_core::tilemaps().push(tilemap.rc().clone());
+    }
+
+    pub fn insert(&self, idx: usize, tilemap: pyo3::PyRef<PyTilemap>) {
+        let tilemaps = pyxel_core::tilemaps();
+        let idx = idx.min(tilemaps.len());
+        tilemaps.insert(idx, tilemap.rc().clone());
+    }
+
+    pub fn extend(&self, items: Vec<pyo3::PyRef<PyTilemap>>) {
+        for t in &items {
+            pyxel_core::tilemaps().push(t.rc().clone());
+        }
+    }
+
+    pub fn __iadd__(&self, items: Vec<pyo3::PyRef<PyTilemap>>) {
+        self.extend(items);
+    }
+
+    #[pyo3(signature = (idx=None))]
+    pub fn pop(&self, idx: Option<i64>) -> PyResult<PyTilemap> {
+        let tilemaps = pyxel_core::tilemaps();
+        let len = tilemaps.len() as i64;
+        if len == 0 {
+            return Err(pyo3::exceptions::PyIndexError::new_err("pop from empty tilemaps list"));
+        }
+        let i = idx.unwrap_or(-1);
+        let i = if i < 0 { i + len } else { i };
+        if i < 0 || i >= len {
+            return Err(pyo3::exceptions::PyIndexError::new_err("pop index out of range"));
+        }
+        Ok(PyTilemap { tilemap: tilemaps.remove(i as usize) })
+    }
+
+    pub fn clear(&self) {
+        pyxel_core::tilemaps().clear();
     }
 }
 
@@ -2053,20 +2301,27 @@ impl PyColors {
         pyxel_core::colors().len()
     }
 
-    pub fn __getitem__(&self, idx: usize) -> PyResult<u32> {
-        pyxel_core::colors().get(idx).copied()
-            .ok_or_else(|| pyo3::exceptions::PyIndexError::new_err("color index out of range"))
+    pub fn __getitem__(&self, idx: i64) -> PyResult<u32> {
+        let colors = pyxel_core::colors();
+        let len = colors.len() as i64;
+        let i = if idx < 0 { idx + len } else { idx };
+        if i < 0 || i >= len {
+            return Err(pyo3::exceptions::PyIndexError::new_err("color index out of range"));
+        }
+        Ok(colors[i as usize])
     }
 
     pub fn __setitem__(&self, idx: pyo3::Bound<'_, pyo3::PyAny>, val: pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<()> {
-        if let Ok(i) = idx.extract::<usize>() {
+        if let Ok(idx_i64) = idx.extract::<i64>() {
             // Single index assignment: colors[i] = 0xRRGGBB
             let v = val.extract::<u32>()?;
             let colors = pyxel_core::colors();
-            if i >= colors.len() {
+            let len = colors.len() as i64;
+            let i = if idx_i64 < 0 { idx_i64 + len } else { idx_i64 };
+            if i < 0 || i >= len {
                 return Err(pyo3::exceptions::PyIndexError::new_err("color index out of range"));
             }
-            colors[i] = v;
+            colors[i as usize] = v;
         } else {
             // Slice assignment: colors[:] = [0x.., 0x.., ...]
             let items = val.extract::<Vec<u32>>()?;
@@ -2081,6 +2336,39 @@ impl PyColors {
     // .pyxpal file with pyxel.colors.append(0)).
     pub fn append(&self, val: u32) {
         pyxel_core::colors().push(val);
+    }
+
+    pub fn insert(&self, idx: usize, val: u32) {
+        let colors = pyxel_core::colors();
+        let idx = idx.min(colors.len());
+        colors.insert(idx, val);
+    }
+
+    pub fn __delitem__(&self, idx: i64) -> PyResult<()> {
+        let colors = pyxel_core::colors();
+        let len = colors.len() as i64;
+        let i = if idx < 0 { idx + len } else { idx };
+        if i < 0 || i >= len {
+            return Err(pyo3::exceptions::PyIndexError::new_err("color index out of range"));
+        }
+        colors.remove(i as usize);
+        Ok(())
+    }
+
+    pub fn __repr__(&self) -> String {
+        format!("{:?}", pyxel_core::colors())
+    }
+
+    pub fn __bool__(&self) -> bool {
+        !pyxel_core::colors().is_empty()
+    }
+
+    pub fn __reversed__(&self) -> Vec<u32> {
+        pyxel_core::colors().iter().rev().copied().collect()
+    }
+
+    pub fn __iadd__(&self, vals: Vec<u32>) {
+        pyxel_core::colors().extend(vals);
     }
 
     pub fn extend(&self, vals: Vec<u32>) {
@@ -2124,21 +2412,35 @@ pub struct PyChannelList;
 
 #[pymethods]
 impl PyChannelList {
-    pub fn __getitem__(&self, idx: usize) -> PyResult<PyChannel> {
-        if idx >= pyxel_core::NUM_CHANNELS as usize {
+    // Bounds now check the Vec's actual (possibly grown/shrunk) length
+    // rather than the fixed NUM_CHANNELS default — upstream's own tests
+    // (test_append_to_global_channels) confirm channels can grow past
+    // the default count via append()/insert(), so NUM_CHANNELS is only
+    // ever the *starting* size, not a hard ceiling.
+    pub fn __len__(&self) -> usize {
+        pyxel_core::channels().len()
+    }
+
+    pub fn __getitem__(&self, idx: i64) -> PyResult<PyChannel> {
+        let len = pyxel_core::channels().len() as i64;
+        let i = if idx < 0 { idx + len } else { idx };
+        if i < 0 || i >= len {
             return Err(pyo3::exceptions::PyIndexError::new_err(
                 format!("channel index {idx} out of range")
             ));
         }
-        Ok(PyChannel { channel_ref: ChannelRef::Bank(idx) })
+        Ok(PyChannel { channel_ref: ChannelRef::Bank(i as usize) })
     }
 
     pub fn __setitem__(&self, idx: pyo3::Bound<'_, pyo3::PyAny>, val: pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<()> {
-        if let Ok(i) = idx.extract::<usize>() {
+        if let Ok(idx_i64) = idx.extract::<i64>() {
             // Single index assignment: channels[n] = channel
-            if i >= pyxel_core::NUM_CHANNELS as usize {
+            let len = pyxel_core::channels().len() as i64;
+            let i = if idx_i64 < 0 { idx_i64 + len } else { idx_i64 };
+            if i < 0 || i >= len {
                 return Err(pyo3::exceptions::PyIndexError::new_err("channel index out of range"));
             }
+            let i = i as usize;
             let ch = val.extract::<pyo3::PyRef<PyChannel>>()?;
             unsafe {
                 let src = &*ch.rc().get();
@@ -2150,7 +2452,7 @@ impl PyChannelList {
             // Slice assignment: channels[:] = [ch0, ch1, ...]
             let items = val.extract::<Vec<pyo3::PyRef<PyChannel>>>()?;
             for (i, ch) in items.iter().enumerate() {
-                if i >= pyxel_core::NUM_CHANNELS as usize { break; }
+                if i >= pyxel_core::channels().len() { break; }
                 unsafe {
                     let src = &*ch.rc().get();
                     let dst = &mut *pyxel_core::channels()[i].get();
@@ -2162,6 +2464,107 @@ impl PyChannelList {
         Ok(())
     }
 
+    pub fn __delitem__(&self, idx: i64) -> PyResult<()> {
+        let channels = pyxel_core::channels();
+        let len = channels.len() as i64;
+        let i = if idx < 0 { idx + len } else { idx };
+        if i < 0 || i >= len {
+            return Err(pyo3::exceptions::PyIndexError::new_err("channel index out of range"));
+        }
+        channels.remove(i as usize);
+        Ok(())
+    }
+
+    pub fn __repr__(&self) -> String {
+        format!("[Channel; {}]", pyxel_core::channels().len())
+    }
+
+    pub fn __bool__(&self) -> bool {
+        !pyxel_core::channels().is_empty()
+    }
+
+    pub fn __reversed__(&self) -> Vec<PyChannel> {
+        (0..pyxel_core::channels().len()).rev()
+            .map(|i| PyChannel { channel_ref: ChannelRef::Bank(i) })
+            .collect()
+    }
+
+    // append/insert copy gain/detune into a brand-new real bank slot
+    // (matching __setitem__'s existing "copy values into the bank"
+    // semantics, rather than aliasing the argument's own Rc) — each
+    // channel bank stays its own independent identity.
+    #[pyo3(signature = (channel=None))]
+    pub fn append(&self, channel: Option<pyo3::PyRef<PyChannel>>) {
+        let fresh = pyxel_core::Channel::new();
+        if let Some(ch) = channel {
+            unsafe {
+                let src = &*ch.rc().get();
+                let dst = &mut *fresh.get();
+                dst.gain   = src.gain;
+                dst.detune = src.detune;
+            }
+        }
+        pyxel_core::channels().push(fresh);
+    }
+
+    #[pyo3(signature = (idx, channel=None))]
+    pub fn insert(&self, idx: usize, channel: Option<pyo3::PyRef<PyChannel>>) {
+        let fresh = pyxel_core::Channel::new();
+        if let Some(ch) = channel {
+            unsafe {
+                let src = &*ch.rc().get();
+                let dst = &mut *fresh.get();
+                dst.gain   = src.gain;
+                dst.detune = src.detune;
+            }
+        }
+        let channels = pyxel_core::channels();
+        let idx = idx.min(channels.len());
+        channels.insert(idx, fresh);
+    }
+
+    pub fn extend(&self, items: Vec<pyo3::PyRef<PyChannel>>) {
+        for ch in &items {
+            let fresh = pyxel_core::Channel::new();
+            unsafe {
+                let src = &*ch.rc().get();
+                let dst = &mut *fresh.get();
+                dst.gain   = src.gain;
+                dst.detune = src.detune;
+            }
+            pyxel_core::channels().push(fresh);
+        }
+    }
+
+    pub fn __iadd__(&self, items: Vec<pyo3::PyRef<PyChannel>>) {
+        self.extend(items);
+    }
+
+    // Removes and returns the bank at idx as a standalone, independent
+    // Channel object (an Owned snapshot of its gain/detune at the time
+    // of removal) — once popped, it's no longer tied to any bank
+    // position, matching how a plain Python list.pop() detaches the
+    // returned item from the list.
+    #[pyo3(signature = (idx=None))]
+    pub fn pop(&self, idx: Option<i64>) -> PyResult<PyChannel> {
+        let channels = pyxel_core::channels();
+        let len = channels.len() as i64;
+        if len == 0 {
+            return Err(pyo3::exceptions::PyIndexError::new_err("pop from empty channels list"));
+        }
+        let i = idx.unwrap_or(-1);
+        let i = if i < 0 { i + len } else { i };
+        if i < 0 || i >= len {
+            return Err(pyo3::exceptions::PyIndexError::new_err("pop index out of range"));
+        }
+        let removed = channels.remove(i as usize);
+        Ok(PyChannel { channel_ref: ChannelRef::Owned(removed) })
+    }
+
+    pub fn clear(&self) {
+        pyxel_core::channels().clear();
+    }
+
     // List-like bulk methods, matching the existing slice-assignment
     // semantics (channels[:] = [...]). Some scripts build a fresh list
     // of standalone Channel() objects and hand the whole thing over at
@@ -2171,7 +2574,7 @@ impl PyChannelList {
     // px.channels.from_list(channels).
     pub fn from_list(&self, items: Vec<pyo3::PyRef<PyChannel>>) {
         for (i, ch) in items.iter().enumerate() {
-            if i >= pyxel_core::NUM_CHANNELS as usize { break; }
+            if i >= pyxel_core::channels().len() { break; }
             unsafe {
                 let src = &*ch.rc().get();
                 let dst = &mut *pyxel_core::channels()[i].get();
@@ -2182,7 +2585,7 @@ impl PyChannelList {
     }
 
     pub fn to_list(&self) -> Vec<PyChannel> {
-        (0..pyxel_core::NUM_CHANNELS as usize)
+        (0..pyxel_core::channels().len())
             .map(|i| PyChannel { channel_ref: ChannelRef::Bank(i) })
             .collect()
     }
@@ -2266,22 +2669,47 @@ impl PyTone {
 #[pyclass(name = "ToneList")]
 pub struct PyToneList;
 
+// Plain helper, kept outside #[pymethods] so PyO3 doesn't try to treat
+// it as an exposed Python method (which caused it to be misinterpreted
+// against the pyclass's own call signature).
+impl PyToneList {
+    fn copy_tone_into(src: &pyo3::PyRef<PyTone>, fresh: &pyxel_core::RcTone) {
+        unsafe {
+            let src = &*src.rc().get();
+            let dst = &mut *fresh.get();
+            dst.mode        = src.mode;
+            dst.sample_bits = src.sample_bits;
+            dst.gain        = src.gain;
+            dst.wavetable   = src.wavetable.clone();
+        }
+    }
+}
+
 #[pymethods]
 impl PyToneList {
-    pub fn __getitem__(&self, idx: usize) -> PyResult<PyTone> {
-        if idx >= pyxel_core::NUM_TONES as usize {
+    pub fn __len__(&self) -> usize {
+        pyxel_core::tones().len()
+    }
+
+    pub fn __getitem__(&self, idx: i64) -> PyResult<PyTone> {
+        let len = pyxel_core::tones().len() as i64;
+        let i = if idx < 0 { idx + len } else { idx };
+        if i < 0 || i >= len {
             return Err(pyo3::exceptions::PyIndexError::new_err(
                 format!("tone bank index {idx} out of range")
             ));
         }
-        Ok(PyTone { tone_ref: ToneRef::Bank(idx) })
+        Ok(PyTone { tone_ref: ToneRef::Bank(i as usize) })
     }
 
     pub fn __setitem__(&self, idx: pyo3::Bound<'_, pyo3::PyAny>, val: pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<()> {
-        if let Ok(i) = idx.extract::<usize>() {
-            if i >= pyxel_core::NUM_TONES as usize {
+        if let Ok(idx_i64) = idx.extract::<i64>() {
+            let len = pyxel_core::tones().len() as i64;
+            let i = if idx_i64 < 0 { idx_i64 + len } else { idx_i64 };
+            if i < 0 || i >= len {
                 return Err(pyo3::exceptions::PyIndexError::new_err("tone index out of range"));
             }
+            let i = i as usize;
             let tone = val.extract::<pyo3::PyRef<PyTone>>()?;
             unsafe {
                 let src = &*tone.rc().get();
@@ -2295,7 +2723,7 @@ impl PyToneList {
             // Slice assignment: tones[:] = [t0, t1, ...]
             let items = val.extract::<Vec<pyo3::PyRef<PyTone>>>()?;
             for (i, tone) in items.iter().enumerate() {
-                if i >= pyxel_core::NUM_TONES as usize { break; }
+                if i >= pyxel_core::tones().len() { break; }
                 unsafe {
                     let src = &*tone.rc().get();
                     let dst = &mut *pyxel_core::tones()[i].get();
@@ -2308,6 +2736,79 @@ impl PyToneList {
         }
         Ok(())
     }
+
+    pub fn __delitem__(&self, idx: i64) -> PyResult<()> {
+        let tones = pyxel_core::tones();
+        let len = tones.len() as i64;
+        let i = if idx < 0 { idx + len } else { idx };
+        if i < 0 || i >= len {
+            return Err(pyo3::exceptions::PyIndexError::new_err("tone index out of range"));
+        }
+        tones.remove(i as usize);
+        Ok(())
+    }
+
+    pub fn __repr__(&self) -> String {
+        format!("[Tone; {}]", pyxel_core::tones().len())
+    }
+
+    pub fn __bool__(&self) -> bool {
+        !pyxel_core::tones().is_empty()
+    }
+
+    pub fn __reversed__(&self) -> Vec<PyTone> {
+        (0..pyxel_core::tones().len()).rev()
+            .map(|i| PyTone { tone_ref: ToneRef::Bank(i) })
+            .collect()
+    }
+
+    #[pyo3(signature = (tone=None))]
+    pub fn append(&self, tone: Option<pyo3::PyRef<PyTone>>) {
+        let fresh = pyxel_core::Tone::new();
+        if let Some(t) = &tone { Self::copy_tone_into(t, &fresh); }
+        pyxel_core::tones().push(fresh);
+    }
+
+    #[pyo3(signature = (idx, tone=None))]
+    pub fn insert(&self, idx: usize, tone: Option<pyo3::PyRef<PyTone>>) {
+        let fresh = pyxel_core::Tone::new();
+        if let Some(t) = &tone { Self::copy_tone_into(t, &fresh); }
+        let tones = pyxel_core::tones();
+        let idx = idx.min(tones.len());
+        tones.insert(idx, fresh);
+    }
+
+    pub fn extend(&self, items: Vec<pyo3::PyRef<PyTone>>) {
+        for t in &items {
+            let fresh = pyxel_core::Tone::new();
+            Self::copy_tone_into(t, &fresh);
+            pyxel_core::tones().push(fresh);
+        }
+    }
+
+    pub fn __iadd__(&self, items: Vec<pyo3::PyRef<PyTone>>) {
+        self.extend(items);
+    }
+
+    #[pyo3(signature = (idx=None))]
+    pub fn pop(&self, idx: Option<i64>) -> PyResult<PyTone> {
+        let tones = pyxel_core::tones();
+        let len = tones.len() as i64;
+        if len == 0 {
+            return Err(pyo3::exceptions::PyIndexError::new_err("pop from empty tones list"));
+        }
+        let i = idx.unwrap_or(-1);
+        let i = if i < 0 { i + len } else { i };
+        if i < 0 || i >= len {
+            return Err(pyo3::exceptions::PyIndexError::new_err("pop index out of range"));
+        }
+        let removed = tones.remove(i as usize);
+        Ok(PyTone { tone_ref: ToneRef::Owned(removed) })
+    }
+
+    pub fn clear(&self) {
+        pyxel_core::tones().clear();
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2318,14 +2819,23 @@ impl PyToneList {
 // Music wrapper (music_wrapper.rs)
 // ---------------------------------------------------------------------------
 
-#[pyclass(name = "Music")]
+// Same reasoning as SoundRef above.
+enum MusicRef {
+    Bank(usize),
+    Owned(pyxel_core::RcMusic),
+}
+
+#[pyclass(name = "Music", unsendable)]
 pub struct PyMusic {
-    bank: usize,
+    music_ref: MusicRef,
 }
 
 impl PyMusic {
     pub fn rc(&self) -> &pyxel_core::RcMusic {
-        &pyxel_core::musics()[self.bank]
+        match &self.music_ref {
+            MusicRef::Bank(i) => &pyxel_core::musics()[*i],
+            MusicRef::Owned(rc) => rc,
+        }
     }
 }
 
@@ -2373,13 +2883,95 @@ pub struct PyMusicList;
 
 #[pymethods]
 impl PyMusicList {
-    pub fn __getitem__(&self, idx: usize) -> PyResult<PyMusic> {
-        if idx >= pyxel_core::NUM_MUSICS as usize {
+    pub fn __len__(&self) -> usize {
+        pyxel_core::musics().len()
+    }
+
+    pub fn __getitem__(&self, idx: i64) -> PyResult<PyMusic> {
+        let len = pyxel_core::musics().len() as i64;
+        let i = if idx < 0 { idx + len } else { idx };
+        if i < 0 || i >= len {
             return Err(pyo3::exceptions::PyIndexError::new_err(
                 format!("music bank index {idx} out of range")
             ));
         }
-        Ok(PyMusic { bank: idx })
+        Ok(PyMusic { music_ref: MusicRef::Bank(i as usize) })
+    }
+
+    pub fn __setitem__(&self, idx: i64, val: pyo3::PyRef<PyMusic>) -> PyResult<()> {
+        let len = pyxel_core::musics().len() as i64;
+        let i = if idx < 0 { idx + len } else { idx };
+        if i < 0 || i >= len {
+            return Err(pyo3::exceptions::PyIndexError::new_err(
+                format!("music bank index {idx} out of range")
+            ));
+        }
+        pyxel_core::musics()[i as usize] = val.rc().clone();
+        Ok(())
+    }
+
+    pub fn __delitem__(&self, idx: i64) -> PyResult<()> {
+        let musics = pyxel_core::musics();
+        let len = musics.len() as i64;
+        let i = if idx < 0 { idx + len } else { idx };
+        if i < 0 || i >= len {
+            return Err(pyo3::exceptions::PyIndexError::new_err("music index out of range"));
+        }
+        musics.remove(i as usize);
+        Ok(())
+    }
+
+    pub fn __repr__(&self) -> String {
+        format!("[Music; {}]", pyxel_core::musics().len())
+    }
+
+    pub fn __bool__(&self) -> bool {
+        !pyxel_core::musics().is_empty()
+    }
+
+    pub fn __reversed__(&self) -> Vec<PyMusic> {
+        pyxel_core::musics().iter().rev()
+            .map(|rc| PyMusic { music_ref: MusicRef::Owned(rc.clone()) })
+            .collect()
+    }
+
+    pub fn append(&self, music: pyo3::PyRef<PyMusic>) {
+        pyxel_core::musics().push(music.rc().clone());
+    }
+
+    pub fn insert(&self, idx: usize, music: pyo3::PyRef<PyMusic>) {
+        let musics = pyxel_core::musics();
+        let idx = idx.min(musics.len());
+        musics.insert(idx, music.rc().clone());
+    }
+
+    pub fn extend(&self, items: Vec<pyo3::PyRef<PyMusic>>) {
+        for m in &items {
+            pyxel_core::musics().push(m.rc().clone());
+        }
+    }
+
+    pub fn __iadd__(&self, items: Vec<pyo3::PyRef<PyMusic>>) {
+        self.extend(items);
+    }
+
+    #[pyo3(signature = (idx=None))]
+    pub fn pop(&self, idx: Option<i64>) -> PyResult<PyMusic> {
+        let musics = pyxel_core::musics();
+        let len = musics.len() as i64;
+        if len == 0 {
+            return Err(pyo3::exceptions::PyIndexError::new_err("pop from empty musics list"));
+        }
+        let i = idx.unwrap_or(-1);
+        let i = if i < 0 { i + len } else { i };
+        if i < 0 || i >= len {
+            return Err(pyo3::exceptions::PyIndexError::new_err("pop index out of range"));
+        }
+        Ok(PyMusic { music_ref: MusicRef::Owned(musics.remove(i as usize)) })
+    }
+
+    pub fn clear(&self) {
+        pyxel_core::musics().clear();
     }
 }
 
