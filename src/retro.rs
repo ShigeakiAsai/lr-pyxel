@@ -303,6 +303,34 @@ pub unsafe extern "C" fn retro_init() {
     #[allow(deprecated)]
     unsafe { pyo3::ffi::Py_OptimizeFlag = 0; }
 
+    // Same root cause as the PYTHONUTF8 env var note above: setting it
+    // via std::env::set_var() doesn't reliably take effect for this
+    // embedded interpreter, and while sys.stdout/stderr could be fixed
+    // after the fact via .reconfigure() (see below), sys.
+    // getfilesystemencoding() has no equivalent post-hoc API — it's
+    // decided once during interpreter startup and then fixed for the
+    // process's life. Confirmed via a real-world report: a directory
+    // containing a valid UTF-8 Japanese folder name (任天堂-麻雀) came
+    // back from os.listdir() with sys.getfilesystemencoding() ==
+    // 'ascii' and every byte turned into a separate lone surrogate
+    // (surrogateescape) — decoded correctly on a plain system python3
+    // in the same environment, but not here.
+    //
+    // Unlike Py_OptimizeFlag, pyo3::ffi doesn't expose the raw
+    // Py_UTF8Mode global directly, so this uses CPython's own
+    // documented pre-initialization API instead (PyPreConfig / Py_
+    // PreInitialize, part of the stable embedding C API since 3.8) to
+    // force utf8_mode=1 before the interpreter proper starts.
+    unsafe {
+        let mut preconfig: pyo3::ffi::PyPreConfig = std::mem::zeroed();
+        pyo3::ffi::PyPreConfig_InitPythonConfig(&mut preconfig);
+        preconfig.utf8_mode = 1;
+        let status = pyo3::ffi::Py_PreInitialize(&preconfig);
+        if pyo3::ffi::PyStatus_Exception(status) != 0 {
+            println!("Warning: Py_PreInitialize (utf8_mode) failed, falling back to default filesystem encoding");
+        }
+    }
+
     // Start Python interpreter (after append_to_inittab)
     pyo3::prepare_freethreaded_python();
 
