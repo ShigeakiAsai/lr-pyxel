@@ -369,6 +369,32 @@ pub unsafe extern "C" fn retro_init() {
     // erf/erfc/fsum) were retired. See git history for the old
     // stub-forcing code and the stub files themselves if this ever
     // needs revisiting.
+
+    // Block `import pygame` (v0.15.x). Unlike the retired math/random/
+    // struct stubs above, this ISN'T working around a broken load —
+    // pygame itself, if a game happens to have it pip-installed into
+    // Lakka's system site-packages, imports and initializes just fine.
+    // The problem is downstream: pygame.mixer opens its own SDL2 audio
+    // device from inside the same RetroArch process that already holds
+    // the machine's sole ALSA PCM device exclusively, so the resulting
+    // audio stream is silently empty rather than erroring. Games that
+    // guard their pygame usage with try/except ImportError (e.g.
+    // LastEmulator's pygame -> AVFoundation -> Pyxel PCM fallback chain)
+    // are meant to fall through to a working path when pygame is
+    // unavailable — we just need `import pygame` to look unavailable.
+    // See pygame_block.py for the full rationale. Deliberately installed
+    // once here at interpreter startup, not per-game in
+    // retro_load_game(): sys.meta_path isn't touched by that function's
+    // per-game sys.modules cleanup, so one install here covers every
+    // game loaded for the rest of this process's life.
+    const PYGAME_BLOCK_PY: &str = include_str!("../pygame_block.py");
+    Python::with_gil(|py| {
+        let globals = pyo3::types::PyDict::new_bound(py);
+        if let Err(e) = py.run_bound(PYGAME_BLOCK_PY, Some(&globals), None) {
+            eprintln!("[lr-pyxel] warning: failed to install pygame import blocker:");
+            e.print(py);
+        }
+    });
 }
 
 #[no_mangle]
