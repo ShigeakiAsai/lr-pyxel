@@ -4,7 +4,7 @@ A libretro core that runs [Pyxel](https://github.com/kitao/pyxel) games on Retro
 
 [日本語 README](README.ja.md)
 
-> **Status**: v0.12.3 tagged, in active development.
+> **Status**: v0.15.5 tagged, in active development, approaching v1.0.0.
 
 ---
 
@@ -186,24 +186,34 @@ rather than crashing or hanging.
   `import pyxel.cli` fails with `ModuleNotFoundError`, which is caught
   and bounces back to the launcher.
 
+A couple of narrower, lower-priority gaps, left as v1.0 limitations:
+
+- Slice-based access (e.g. `pyxel.colors[1:3]`) isn't supported on the
+  top-level bank lists (`colors`/`channels`/`tones`/`images`/`sounds`/
+  `tilemaps`/`musics`) — only single-index access. `Music.seqs` is the
+  one exception, since upstream's own tests specifically require slice
+  assignment there.
+- A handful of test-only APIs upstream Pyxel exposes for its own pytest
+  suite (e.g. `pyxel.set_btn()`-style input injection,
+  `pyxel.utils.list_imported_modules()`) aren't implemented — these
+  exist to support upstream's own testing infrastructure, not real
+  games, so there's no plan to add them.
+
 ---
 
 ## Known Issues
 
-- Per-bank audio/graphics state (`sounds()`, `musics()`, `tones()`,
-  `channels()` gain/detune) isn't reset when switching content, unlike
-  the color palette / screen size / input state, which are. No
-  concrete failure has been observed yet, but the same class of bug is
-  possible.
-- `Tilemap.blt()` (both the top-level `pyxel.bltm()` and the `Tilemap`
-  instance method) only accepts an integer bank index as the source,
-  not a `Tilemap` object — unlike `Image.blt()`, which accepts either.
-- The Python API surface isn't independently verified complete against
-  upstream Pyxel — several gaps (e.g. `pyxel.screen`, `pyxel.colors`/
-  `pyxel.channels` list methods like `append()`/`from_list()`) have
-  been found and fixed via real third-party games surfacing
-  `AttributeError`s that plain testing hadn't caught. If a script hits
-  one, please report it.
+- The Python API surface has been cross-checked against upstream
+  Pyxel's own pytest suite (all 22 test files; a handful that spawn
+  subprocesses expecting a standalone `import pyxel`, or exercise
+  `pyxel.cli`, don't apply to lr-pyxel's embedded-module architecture
+  and were excluded) — gaps found this way have been fixed as they
+  turned up. If a script still hits an `AttributeError` or similar,
+  please report it.
+- A few error messages differ in exact wording from upstream (e.g. one
+  `TypeError` message that's a PyO3-version-dependent auto-generated
+  string) — these are functionally correct (the right exception type
+  is raised), just not verbatim-identical text.
 
 ---
 
