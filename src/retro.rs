@@ -1044,6 +1044,7 @@ pub unsafe extern "C" fn retro_run() {
     input::inject_input(buttons);
     if let Some(state) = INPUT_STATE {
         input::inject_mouse_input(state);
+        input::inject_keyboard_input(state);
     }
 
     // Check if frontend requested a content load
