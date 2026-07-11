@@ -1,6 +1,6 @@
 [package]
 name = "lr-pyxel"
-version = "0.15.6"
+version = "0.15.7"
 edition = "2021"
 
 [lib]
