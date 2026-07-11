@@ -186,39 +186,39 @@ define_live_list!(PyToneWavetable, "ToneWavetable", pyxel_core::RcTone, pyxel_co
 // -- drawing -----------------------------------------------------------------
 
 #[pyfunction]
-pub fn cls(color: u8) {
+pub fn cls(col: u8) {
     unsafe {
         if PYXEL_READY {
-            pyxel_core::pyxel().clear(color);
+            pyxel_core::pyxel().clear(col);
         }
     }
 }
 
 #[pyfunction]
-pub fn rect(x: f32, y: f32, w: f32, h: f32, color: u8) {
+pub fn rect(x: f32, y: f32, w: f32, h: f32, col: u8) {
     unsafe {
         if PYXEL_READY {
-            pyxel_core::pyxel().draw_rect(x, y, w, h, color);
+            pyxel_core::pyxel().draw_rect(x, y, w, h, col);
         }
     }
 }
 
 #[pyfunction]
-#[pyo3(signature = (x, y, s, color, font=None))]
-pub fn text(x: f32, y: f32, s: &str, color: u8, font: Option<pyo3::PyRef<PyFont>>) {
+#[pyo3(signature = (x, y, s, col, font=None))]
+pub fn text(x: f32, y: f32, s: &str, col: u8, font: Option<pyo3::PyRef<PyFont>>) {
     unsafe {
         if PYXEL_READY {
             let font_ref = font.as_ref().map(|f| &f.inner);
-            pyxel_core::pyxel().draw_text(x, y, s, color, font_ref);
+            pyxel_core::pyxel().draw_text(x, y, s, col, font_ref);
         }
     }
 }
 
 #[pyfunction]
-pub fn pset(x: f32, y: f32, color: u8) {
+pub fn pset(x: f32, y: f32, col: u8) {
     unsafe {
         if PYXEL_READY {
-            pyxel_core::pyxel().set_pixel(x, y, color);
+            pyxel_core::pyxel().set_pixel(x, y, col);
         }
     }
 }
@@ -835,19 +835,32 @@ pub fn btnp(key: u32, hold: Option<u32>, repeat: Option<u32>) -> bool {
 // default 128, and the real init() call's correct height (240) was
 // never propagated to the actual canvas.
 #[pyfunction]
-#[pyo3(signature = (w, h, title=None, fps=None, quit_key=None,
+#[pyo3(signature = (width, height, title=None, caption=None, fps=None, quit_key=None,
                     display_scale=None, capture_scale=None,
                     capture_sec=None))]
+#[allow(clippy::too_many_arguments)]
 pub fn init(
-    w: u32, h: u32,
-    title: Option<&str>, fps: Option<u32>, quit_key: Option<u32>,
+    width: u32, height: u32,
+    title: Option<&str>, caption: Option<&str>, fps: Option<u32>, quit_key: Option<u32>,
     display_scale: Option<u32>, capture_scale: Option<u32>, capture_sec: Option<u32>,
 ) {
+    // caption predates upstream's rename to title in an early Pyxel
+    // version — some older scripts (e.g. this exact NyanCat sample)
+    // still call init(..., caption="...") rather than title=. Found
+    // via the SAME class of bug as w/h below: init()'s parameter names
+    // must match upstream's documented ones exactly for keyword-
+    // argument calls (pyxel.init(width=160, ...)) to work at all —
+    // PyO3 matches keyword arguments against the Rust parameter names
+    // themselves, not just position.
+    if caption.is_some() {
+        warn_deprecated_once("init.caption", "init()'s caption argument (use title instead)");
+    }
+    let title = title.or(caption);
     let _ = (title, quit_key, display_scale, capture_scale, capture_sec);
     unsafe {
         // Save game-requested size and FPS
-        GAME_W = w.max(1);
-        GAME_H = h.max(1);
+        GAME_W = width.max(1);
+        GAME_H = height.max(1);
         GAME_FPS = fps.unwrap_or(30).clamp(1, 60);
 
         // Actually resize the physical canvas to match — this is the
@@ -1350,42 +1363,42 @@ pub fn noise(x: f32, y: Option<f32>, z: Option<f32>) -> f32 {
 // ---------------------------------------------------------------------------
 
 #[pyfunction]
-pub fn line(x1: f32, y1: f32, x2: f32, y2: f32, color: u8) {
-    unsafe { if PYXEL_READY { pyxel_core::pyxel().draw_line(x1, y1, x2, y2, color); } }
+pub fn line(x1: f32, y1: f32, x2: f32, y2: f32, col: u8) {
+    unsafe { if PYXEL_READY { pyxel_core::pyxel().draw_line(x1, y1, x2, y2, col); } }
 }
 #[pyfunction]
-pub fn rectb(x: f32, y: f32, w: f32, h: f32, color: u8) {
-    unsafe { if PYXEL_READY { pyxel_core::pyxel().draw_rect_border(x, y, w, h, color); } }
+pub fn rectb(x: f32, y: f32, w: f32, h: f32, col: u8) {
+    unsafe { if PYXEL_READY { pyxel_core::pyxel().draw_rect_border(x, y, w, h, col); } }
 }
 #[pyfunction]
-pub fn circ(x: f32, y: f32, r: f32, color: u8) {
-    unsafe { if PYXEL_READY { pyxel_core::pyxel().draw_circle(x, y, r, color); } }
+pub fn circ(x: f32, y: f32, r: f32, col: u8) {
+    unsafe { if PYXEL_READY { pyxel_core::pyxel().draw_circle(x, y, r, col); } }
 }
 #[pyfunction]
-pub fn circb(x: f32, y: f32, r: f32, color: u8) {
-    unsafe { if PYXEL_READY { pyxel_core::pyxel().draw_circle_border(x, y, r, color); } }
+pub fn circb(x: f32, y: f32, r: f32, col: u8) {
+    unsafe { if PYXEL_READY { pyxel_core::pyxel().draw_circle_border(x, y, r, col); } }
 }
 #[pyfunction]
-pub fn elli(x: f32, y: f32, w: f32, h: f32, color: u8) {
-    unsafe { if PYXEL_READY { pyxel_core::pyxel().draw_ellipse(x, y, w, h, color); } }
+pub fn elli(x: f32, y: f32, w: f32, h: f32, col: u8) {
+    unsafe { if PYXEL_READY { pyxel_core::pyxel().draw_ellipse(x, y, w, h, col); } }
 }
 #[pyfunction]
-pub fn ellib(x: f32, y: f32, w: f32, h: f32, color: u8) {
-    unsafe { if PYXEL_READY { pyxel_core::pyxel().draw_ellipse_border(x, y, w, h, color); } }
-}
-#[pyfunction]
-#[allow(clippy::too_many_arguments)]
-pub fn tri(x1: f32, y1: f32, x2: f32, y2: f32, x3: f32, y3: f32, color: u8) {
-    unsafe { if PYXEL_READY { pyxel_core::pyxel().draw_triangle(x1, y1, x2, y2, x3, y3, color); } }
+pub fn ellib(x: f32, y: f32, w: f32, h: f32, col: u8) {
+    unsafe { if PYXEL_READY { pyxel_core::pyxel().draw_ellipse_border(x, y, w, h, col); } }
 }
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
-pub fn trib(x1: f32, y1: f32, x2: f32, y2: f32, x3: f32, y3: f32, color: u8) {
-    unsafe { if PYXEL_READY { pyxel_core::pyxel().draw_triangle_border(x1, y1, x2, y2, x3, y3, color); } }
+pub fn tri(x1: f32, y1: f32, x2: f32, y2: f32, x3: f32, y3: f32, col: u8) {
+    unsafe { if PYXEL_READY { pyxel_core::pyxel().draw_triangle(x1, y1, x2, y2, x3, y3, col); } }
 }
 #[pyfunction]
-pub fn fill(x: f32, y: f32, color: u8) {
-    unsafe { if PYXEL_READY { pyxel_core::pyxel().flood_fill(x, y, color); } }
+#[allow(clippy::too_many_arguments)]
+pub fn trib(x1: f32, y1: f32, x2: f32, y2: f32, x3: f32, y3: f32, col: u8) {
+    unsafe { if PYXEL_READY { pyxel_core::pyxel().draw_triangle_border(x1, y1, x2, y2, x3, y3, col); } }
+}
+#[pyfunction]
+pub fn fill(x: f32, y: f32, col: u8) {
+    unsafe { if PYXEL_READY { pyxel_core::pyxel().flood_fill(x, y, col); } }
 }
 #[pyfunction]
 #[pyo3(signature = (x=None, y=None, w=None, h=None))]
