@@ -785,6 +785,10 @@ pub unsafe extern "C" fn retro_load_game(game: *const c_void) -> bool {
             Some(p) => p,
             None => {
                 eprintln!("[lr-pyxel] Failed to extract .pyxapp: {}", path);
+                show_retroarch_message(
+                    "Failed to load .pyxapp: invalid or unsupported format (see log for details)",
+                    240,
+                );
                 return true;
             }
         }
@@ -1198,7 +1202,14 @@ unsafe fn load_game_from_path(path: &str) {
     let script_path = if path.ends_with(".pyxapp") {
         match extract_pyxapp(path) {
             Some(p) => p,
-            None => return,
+            None => {
+                eprintln!("[lr-pyxel] Failed to extract .pyxapp: {}", path);
+                show_retroarch_message(
+                    "Failed to load .pyxapp: invalid or unsupported format (see log for details)",
+                    240,
+                );
+                return;
+            }
         }
     } else {
         path.to_string()
