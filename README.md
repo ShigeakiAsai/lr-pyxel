@@ -123,10 +123,11 @@ sudo apt install build-essential cmake clang libclang-dev python3-dev
 - `Cargo.toml` pins `pyxel-core` to the `lr-pyxel` branch of
   [ShigeakiAsai/pyxel](https://github.com/ShigeakiAsai/pyxel) (a fork of
   upstream Pyxel), **not** the default branch — the fork's `main` branch is
-  kept clean for upstream contributions (see PR
-  [kitao/pyxel#718](https://github.com/kitao/pyxel/pull/718)). After
-  pulling changes to that branch, run `cargo update -p pyxel-core` before
-  rebuilding.
+  kept clean for upstream contributions (see PRs
+  [kitao/pyxel#714](https://github.com/kitao/pyxel/pull/714) and
+  [kitao/pyxel#718](https://github.com/kitao/pyxel/pull/718), both
+  pending upstream review). After pulling changes to that branch, run
+  `cargo update -p pyxel-core` before rebuilding.
 - The `lakka` Cargo feature gates Lakka/LibreELEC-specific defaults (see
   [Overview](#overview)) and is **not enabled by default** — Lakka
   builds must opt in explicitly. `package.mk` passes `--features lakka`

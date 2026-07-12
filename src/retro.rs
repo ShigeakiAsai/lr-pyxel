@@ -248,8 +248,22 @@ pub unsafe extern "C" fn retro_init() {
     // Register "pyxel" built-in module BEFORE Py_Initialize
     append_to_inittab!(pyxel);
 
-    // Prevent SDL2 from grabbing the ALSA device directly.
-    // Audio is routed through libretro's audio_batch_cb instead.
+    // NOTE: pyxel-core (ShigeakiAsai/pyxel fork, PR kitao/pyxel#718
+    // pending upstream review) already skips its own Audio::start() —
+    // and therefore its own SDL2 audio device — entirely in headless
+    // mode. So this setting no longer protects pyxel_core itself from
+    // fighting RetroArch for the ALSA device; that path is never
+    // touched in headless mode to begin with.
+    //
+    // The one thing this still affects is pygame's separately-linked
+    // SDL2 (see pygame_block.py for that story: on some pygame/SDL2
+    // builds, SDL_AUDIODRIVER=dummy makes pygame.mixer.init() silently
+    // "succeed" into producing no audio, which is exactly the failure
+    // mode pygame_block.py exists to route around).
+    //
+    // Kept as a safe default either way: if PR #718 is ever rejected,
+    // or pyxel-core gets rebuilt against an unpatched upstream release,
+    // this setting would matter again for pyxel_core itself too.
     std::env::set_var("SDL_AUDIODRIVER", "dummy");
 
     // Initialize Pyxel engine in headless mode

@@ -123,9 +123,10 @@ sudo apt install build-essential cmake clang libclang-dev python3-dev
   [ShigeakiAsai/pyxel](https://github.com/ShigeakiAsai/pyxel)の
   **デフォルトブランチではなく`lr-pyxel`ブランチ**に固定しています——
   フォークの`main`ブランチは本家への貢献用にクリーンな状態を保っています
-  （PR [kitao/pyxel#718](https://github.com/kitao/pyxel/pull/718)参照）。
-  そちらのブランチへの変更を取り込んだ後は、再ビルド前に
-  `cargo update -p pyxel-core`を実行してください。
+  （PR [kitao/pyxel#714](https://github.com/kitao/pyxel/pull/714)・
+  [kitao/pyxel#718](https://github.com/kitao/pyxel/pull/718)参照、
+  いずれもレビュー待ち）。そちらのブランチへの変更を取り込んだ後は、
+  再ビルド前に`cargo update -p pyxel-core`を実行してください。
 - `lakka` Cargo featureが、Lakka/LibreELEC固有のデフォルト値（[概要](#概要)参照）
   を切り替えます。**デフォルトでは無効**なので、Lakkaビルドは明示的に
   有効化する必要があります。`package.mk`が`cargo build`に`--features lakka`
