@@ -168,6 +168,59 @@ pub unsafe extern "C" fn retro_init() {
     #[cfg(not(feature = "lakka"))]
     std::env::set_var("LR_PYXEL_ROMS_ROOT_LOCKED", "0");
 
+    // {system_dir}/pyxel: lr-pyxel's persistent per-core directory (own
+    // tools, vendored packages), as opposed to ROMS_DIR (user content).
+    // Resolves via the standard GET_SYSTEM_DIRECTORY (cmd 9) libretro
+    // call. Lakka-only, same reasoning as roms_dir/downloader above:
+    // non-Lakka builds have pip available, so a vendor directory isn't
+    // needed there — the person can just `pip install` normally. (Site
+    // note: GET_SYSTEM_DIRECTORY itself isn't Lakka-specific, so if a
+    // non-Lakka build ever turns out to have the same missing-
+    // site-packages problem as Lakka, this could be un-gated later —
+    // but that's an unverified, separate question from today, not
+    // something to build in speculatively now.)
+    #[cfg(feature = "lakka")]
+    let system_pyxel_dir: String = {
+        let mut dir: *const std::os::raw::c_char = std::ptr::null();
+        let got = ENVIRON_CB.map(|cb| cb(9, &mut dir as *mut _ as *mut c_void)).unwrap_or(false);
+        if got && !dir.is_null() {
+            std::ffi::CStr::from_ptr(dir).to_str().ok()
+                .filter(|s| !s.is_empty())
+                .map(|s| format!("{s}/pyxel"))
+                .unwrap_or_else(|| "/tmp/lr-pyxel-system".to_string())
+        } else {
+            "/tmp/lr-pyxel-system".to_string()
+        }
+    };
+    #[cfg(feature = "lakka")]
+    if let Err(e) = std::fs::create_dir_all(&system_pyxel_dir) {
+        eprintln!("[lr-pyxel] warning: could not create system_pyxel_dir \"{system_pyxel_dir}\": {e}");
+    }
+
+    // {system_pyxel_dir}/site-packages: a persistent place for
+    // third-party packages the person has manually vendored (e.g. a
+    // pygame or numpy wheel extracted by hand — Lakka has no pip).
+    // lr-pyxel's embedded Python doesn't search the OS's usual per-user
+    // site-packages location (confirmed missing from sys.path during
+    // the pygame investigation, see pygame_block.py's rationale for the
+    // related SDL_AUDIODRIVER story), so this directory is inserted
+    // into sys.path explicitly, once, right after the interpreter
+    // starts — see the sys.path wiring further down in this function.
+    // Unlike a .pyxapp's own private extraction directory (confirmed
+    // during the mini_shooting/numpy experiment to be a throwaway
+    // /tmp/lr-pyxel/<name>/ path), this location is both persistent
+    // and shared across every game, matching the "vendor" model
+    // discussed for pygame/numpy: nothing is bundled by lr-pyxel
+    // itself, the person places wheels here themselves.
+    #[cfg(feature = "lakka")]
+    let site_packages_dir = format!("{system_pyxel_dir}/site-packages");
+    #[cfg(feature = "lakka")]
+    if let Err(e) = std::fs::create_dir_all(&site_packages_dir) {
+        eprintln!("[lr-pyxel] warning: could not create site_packages_dir \"{site_packages_dir}\": {e}");
+    }
+    #[cfg(feature = "lakka")]
+    std::env::set_var("LR_PYXEL_SITE_PACKAGES_DIR", &site_packages_dir);
+
     // The in-core downloader (embedding + auto-extraction to
     // {system_dir}/pyxel/downloader.pyxapp) is Lakka-only by design —
     // it assumes Lakka's model of "the core bundles its own content
@@ -178,27 +231,6 @@ pub unsafe extern "C" fn retro_init() {
     // has manually placed a downloader.pyxapp in ROMS_DIR themselves.
     #[cfg(feature = "lakka")]
     {
-        // {system_dir}/pyxel: lr-pyxel's own tools (currently just
-        // downloader.pyxapp), as opposed to ROMS_DIR (user content).
-        // This resolves to "/tmp/system/pyxel" on Lakka, confirmed to
-        // be a persistent overlayfs (upperdir=/storage/system) rather
-        // than a throwaway tmpfs path.
-        let system_pyxel_dir: String = {
-            let mut dir: *const std::os::raw::c_char = std::ptr::null();
-            let got = ENVIRON_CB.map(|cb| cb(9, &mut dir as *mut _ as *mut c_void)).unwrap_or(false);
-            if got && !dir.is_null() {
-                std::ffi::CStr::from_ptr(dir).to_str().ok()
-                    .filter(|s| !s.is_empty())
-                    .map(|s| format!("{s}/pyxel"))
-                    .unwrap_or_else(|| "/tmp/lr-pyxel-system".to_string())
-            } else {
-                "/tmp/lr-pyxel-system".to_string()
-            }
-        };
-        if let Err(e) = std::fs::create_dir_all(&system_pyxel_dir) {
-            eprintln!("[lr-pyxel] warning: could not create system_pyxel_dir \"{system_pyxel_dir}\": {e}");
-        }
-
         // Extract the embedded downloader.pyxapp there if it isn't
         // present yet (first boot, or after an update ships a newer
         // embedded copy). Previously the person had to place
@@ -393,6 +425,27 @@ pub unsafe extern "C" fn retro_init() {
         if let Err(e) = py.run_bound(PYGAME_BLOCK_PY, Some(&globals), None) {
             eprintln!("[lr-pyxel] warning: failed to install pygame import blocker:");
             e.print(py);
+        }
+    });
+
+    // Add the persistent vendor site-packages dir (see
+    // LR_PYXEL_SITE_PACKAGES_DIR above) to sys.path, once, here at
+    // interpreter startup. Same rationale as the pygame blocker above:
+    // sys.path modifications made here persist for the rest of this
+    // process's life, independent of where any individual .pyxapp's own
+    // sys.path[0] ends up (each game's own /tmp/lr-pyxel/<name>/
+    // extraction dir) — no per-game re-wiring needed. Lakka-only, see
+    // site_packages_dir's own comment above for why.
+    #[cfg(feature = "lakka")]
+    Python::with_gil(|py| {
+        if let Ok(sys) = py.import_bound("sys") {
+            if let Ok(syspath) = sys.getattr("path") {
+                if let Ok(syspath) = syspath.downcast_into::<pyo3::types::PyList>() {
+                    if let Err(e) = syspath.insert(0, site_packages_dir.clone()) {
+                        eprintln!("[lr-pyxel] warning: failed to add site-packages dir to sys.path: {e}");
+                    }
+                }
+            }
         }
     });
 }
@@ -647,6 +700,35 @@ fn parse_pyxel_init(script: &str, extra_sources: &[String]) -> Option<(u32, u32,
 }
 
 
+// True if `name`'s entry in `modules_dict` was loaded from somewhere
+// under the persistent vendor site-packages directory (see
+// LR_PYXEL_SITE_PACKAGES_DIR in retro_init()). Checked by where the
+// module actually came from (__spec__.origin, falling back to
+// __file__), not by name: this is what lets the per-game sys.modules
+// cleanup (see retro_load_game()/retro_run()) correctly spare vendored
+// packages like numpy without lr-pyxel needing to know package names in
+// advance — whatever the person vendors is covered automatically, the
+// same way pygame_block.py's blocking generalizes without a
+// per-package allowlist. Lakka-only, like the vendor directory itself.
+#[cfg(feature = "lakka")]
+fn should_keep_vendor_module(modules_dict: &pyo3::Bound<pyo3::types::PyDict>, name: &str) -> bool {
+    let Some(module) = modules_dict.get_item(name).ok().flatten() else { return false; };
+    let Ok(vendor_dir) = std::env::var("LR_PYXEL_SITE_PACKAGES_DIR") else { return false; };
+    let origin = module.getattr("__spec__").ok()
+        .and_then(|spec| spec.getattr("origin").ok())
+        .and_then(|o| o.extract::<String>().ok())
+        .or_else(|| module.getattr("__file__").ok().and_then(|f| f.extract::<String>().ok()));
+    origin.map(|o| o.starts_with(&vendor_dir)).unwrap_or(false)
+}
+
+// Non-Lakka builds have no vendor directory (see retro_init()'s
+// LR_PYXEL_SITE_PACKAGES_DIR comment), so there's nothing to spare —
+// this stub keeps both cleanup call sites free of #[cfg] branching.
+#[cfg(not(feature = "lakka"))]
+fn should_keep_vendor_module(_modules_dict: &pyo3::Bound<pyo3::types::PyDict>, _name: &str) -> bool {
+    false
+}
+
 fn extract_pyxapp(pyxapp_path: &str) -> Option<String> {
 
     let file = std::fs::File::open(pyxapp_path).ok()?;
@@ -853,7 +935,14 @@ pub unsafe extern "C" fn retro_load_game(game: *const c_void) -> bool {
         if let Ok(sys) = pyo3::Python::import_bound(py, "sys") {
             if let Ok(modules) = sys.getattr("modules") {
                 if let Ok(modules_dict) = modules.downcast_into::<pyo3::types::PyDict>() {
-                    // Keep only stdlib and built-in modules, remove game modules
+                    // Keep only stdlib, built-in, and vendor modules, remove
+                    // game modules. Vendor packages (numpy etc.) should
+                    // survive this cleanup: they're meant to be shared
+                    // across every game in the session, not re-imported
+                    // each time — clearing+reimporting them mid-session is
+                    // what produced NumPy's own "module was reloaded"
+                    // warning during the mini_shooting -> Mandelbrot vendor
+                    // test. See should_keep_vendor_module() above.
                     let keys_to_remove: Vec<String> = modules_dict
                         .keys()
                         .iter()
@@ -869,6 +958,7 @@ pub unsafe extern "C" fn retro_load_game(game: *const c_void) -> bool {
                                     | "collections" | "itertools" | "operator"
                                     | "re" | "enum" | "warnings" | "weakref"
                                 )
+                                && !should_keep_vendor_module(&modules_dict, k)
                         })
                         .collect();
                     for key in keys_to_remove {
@@ -1255,6 +1345,8 @@ unsafe fn load_game_from_path(path: &str) {
         if let Ok(sys) = py.import_bound("sys") {
             if let Ok(modules) = sys.getattr("modules") {
                 if let Ok(modules_dict) = modules.downcast_into::<pyo3::types::PyDict>() {
+                    // Vendor packages should survive this cleanup too — see
+                    // should_keep_vendor_module()'s comment above.
                     let keys_to_remove: Vec<String> = modules_dict
                         .keys()
                         .iter()
@@ -1270,6 +1362,7 @@ unsafe fn load_game_from_path(path: &str) {
                                     | "collections" | "itertools" | "operator"
                                     | "re" | "enum" | "warnings" | "weakref"
                                 )
+                                && !should_keep_vendor_module(&modules_dict, k)
                         })
                         .collect();
                     for key in keys_to_remove {
