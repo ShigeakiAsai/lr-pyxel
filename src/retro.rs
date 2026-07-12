@@ -551,6 +551,24 @@ unsafe fn reset_channel_gains() {
     }
 }
 
+// Builds the OSD text to show when a game script fails to run. For
+// ModuleNotFoundError specifically, names the missing module (pulled
+// from the exception's own `.name` attribute) so the person can tell
+// at a glance whether vendoring a package (see
+// LR_PYXEL_SITE_PACKAGES_DIR) would fix it, without needing SSH/
+// journalctl access to read the traceback. Any other exception falls
+// back to the previous generic message.
+unsafe fn script_error_message(py: Python, e: &pyo3::PyErr) -> String {
+    if e.is_instance_of::<pyo3::exceptions::PyModuleNotFoundError>(py) {
+        if let Some(name) = e.value_bound(py).getattr("name").ok()
+            .and_then(|n| n.extract::<String>().ok())
+        {
+            return format!("Missing module: {name} (see log for details)");
+        }
+    }
+    "This app is not compatible with lr-pyxel (see log for details)".to_string()
+}
+
 // Show a short on-screen notification via RetroArch's own OSD message
 // system (RETRO_ENVIRONMENT_SET_MESSAGE = 12), instead of building a
 // custom in-Pyxel error screen. Used when a script fails to load (e.g.
@@ -1063,10 +1081,7 @@ pub unsafe extern "C" fn retro_load_game(game: *const c_void) -> bool {
             }
             Err(e) => {
                 e.print(py);
-                show_retroarch_message(
-                    "This app is not compatible with lr-pyxel (see log for details)",
-                    240,
-                );
+                show_retroarch_message(&script_error_message(py, &e), 240);
             }
         }
     });
@@ -1433,10 +1448,7 @@ unsafe fn load_game_from_path(path: &str) {
                 }
                 Err(e) => {
                     e.print(py);
-                    show_retroarch_message(
-                        "This app is not compatible with lr-pyxel (see log for details)",
-                        240,
-                    );
+                    show_retroarch_message(&script_error_message(py, &e), 240);
                 }
             }
         }
