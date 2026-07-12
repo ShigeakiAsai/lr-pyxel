@@ -2,9 +2,9 @@
 
 RetroArch/Lakka上で[Pyxel](https://github.com/kitao/pyxel)のゲームを動かすlibretroコアです。
 
-[English README](README.md)
+[English README](README.md) | [FAQ](FAQ.ja.md)
 
-> **ステータス**：v0.15.5タグ付け済み、継続開発中。v1.0.0に向けて進行中。
+> **ステータス**：v0.16.4タグ付け済み、継続開発中。v1.0.0に向けて進行中。
 
 ---
 
@@ -162,6 +162,14 @@ libretroコア経由よりも[本家Pyxel](https://github.com/kitao/pyxel)を
 意味を持つのは、Lakkaのような「Pyxelがそもそも動かせない環境」に届ける
 場合だと考えています。
 
+### 対応アーキテクチャ
+
+lr-pyxelは**64bit環境のみ**（`aarch64` / `x86_64`）を対象としています。
+`armv7`・`i386`には対応しておらず、対応予定もありません：`pyxel-core`は
+`Rust`で実装されており、`Rust`のツールチェーン・依存クレートは32bitの
+ARM/x86環境での実績が限定的で、安定した対応が見込みにくいためです。
+そちらを追いかけるより、64bit環境でのビルド品質・機能に力を注ぐ方針です。
+
 ---
 
 ## 既知の制限事項
@@ -196,6 +204,18 @@ libretroコア経由よりも[本家Pyxel](https://github.com/kitao/pyxel)を
   list_imported_modules()`等）は実装していません。これらは本家の
   テスト基盤を支えるためのものであり、実際のゲームには関係しないため、
   対応予定もありません。
+- セーブデータが永続化されるのは、ゲームが本家Pyxelの
+  `user_data_dir(vendor_name, app_name)`機構を使っている場合のみです。
+  素の相対パスで独自にセーブ・設定ファイルの読み書き（例：
+  `open("save.json", "w")`）を行っているゲームの場合、そのファイルは
+  そのセッション限りで消えます：`retro_load_game()`は、相対パスでの
+  アセット読み込み（例：`pyxel.load("assets/foo.pyxres")`）を正しく
+  解決するため、カレントディレクトリをゲーム自身の展開先フォルダに
+  設定しますが、`.pyxapp`の場合そのフォルダは一時的な展開先であり、
+  永続的な保存場所ではありません。これは`.pyxapp`展開の仕組み上
+  避けられないものであり、lr-pyxel側で特別扱いする予定はありません
+  ——もし遭遇した場合は、lr-pyxelではなくそのゲームの作者様へ
+  ご報告ください。
 
 ---
 
@@ -232,6 +252,8 @@ libretroコア経由よりも[本家Pyxel](https://github.com/kitao/pyxel)を
 - `LastEmulator.pyxapp`（マウス操作、ネイティブサイズの720×480で確認済み）
 - `dungeon-antiqua.pyxapp`、`dungeon-antiqua2.pyxapp`（1024×960まで
   確認済み）、`dungeon-antiqua-v2.pyxapp`
+- [Tetris Pyxel](https://github.com/mehrdad-mixtape/Tetris_Pyxel/)
+  （`.pyxapp`として再パッケージ済み、外部モジュール依存なし）
 
 ---
 

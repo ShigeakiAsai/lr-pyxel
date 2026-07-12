@@ -2,9 +2,9 @@
 
 A libretro core that runs [Pyxel](https://github.com/kitao/pyxel) games on RetroArch/Lakka.
 
-[日本語 README](README.ja.md)
+[日本語 README](README.ja.md) | [FAQ](FAQ.md)
 
-> **Status**: v0.15.5 tagged, in active development, approaching v1.0.0.
+> **Status**: v0.16.4 tagged, in active development, approaching v1.0.0.
 
 ---
 
@@ -165,6 +165,14 @@ easier and more direct than going through a libretro core, which only
 really earns its keep on platforms (like Lakka) where Pyxel can't
 otherwise run at all.
 
+### Supported Architecture
+
+lr-pyxel targets **64-bit only** (`aarch64` / `x86_64`). `armv7` and
+`i386` aren't supported, and there are no plans to add them: `pyxel-core`
+is implemented in Rust, and Rust's toolchain and dependency crates have
+a limited, less-stable track record on 32-bit ARM/x86 targets. Effort
+goes into 64-bit build quality and features instead of chasing that.
+
 ---
 
 ## Known Limitations
@@ -198,6 +206,17 @@ A couple of narrower, lower-priority gaps, left as v1.0 limitations:
   `pyxel.utils.list_imported_modules()`) aren't implemented — these
   exist to support upstream's own testing infrastructure, not real
   games, so there's no plan to add them.
+- Save data only persists when a game uses upstream Pyxel's own
+  `user_data_dir(vendor_name, app_name)` mechanism. Games that
+  implement their own save/config file I/O with bare relative paths
+  (e.g. `open("save.json", "w")`) will find those files don't survive
+  past the current session: `retro_load_game()` sets the working
+  directory to the game's own extraction folder so relative asset
+  paths resolve correctly (e.g. `pyxel.load("assets/foo.pyxres")`),
+  and for `.pyxapp` files that folder is a temporary extraction
+  directory, not persistent storage. This is inherent to how `.pyxapp`
+  extraction works, not something lr-pyxel plans to special-case — if
+  you hit this, please report it to the game's own author.
 
 ---
 
@@ -235,6 +254,8 @@ native Linux RetroArch install:
 - `LastEmulator.pyxapp` (mouse-driven; confirmed at its native 720x480)
 - `dungeon-antiqua.pyxapp`, `dungeon-antiqua2.pyxapp` (confirmed up to
   1024x960), `dungeon-antiqua-v2.pyxapp`
+- [Tetris Pyxel](https://github.com/mehrdad-mixtape/Tetris_Pyxel/)
+  (repackaged as `.pyxapp`; no external module dependencies)
 
 ---
 
