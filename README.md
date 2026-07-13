@@ -4,7 +4,7 @@ A libretro core that runs [Pyxel](https://github.com/kitao/pyxel) games on Retro
 
 [日本語 README](README.ja.md) | [FAQ](FAQ.md)
 
-> **Status**: v0.16.4 tagged, in active development, approaching v1.0.0.
+> **Status**: v0.17.3 tagged, in active development, approaching v1.0.0.
 
 ---
 
@@ -197,11 +197,6 @@ rather than crashing or hanging.
 
 A couple of narrower, lower-priority gaps, left as v1.0 limitations:
 
-- Slice-based access (e.g. `pyxel.colors[1:3]`) isn't supported on the
-  top-level bank lists (`colors`/`channels`/`tones`/`images`/`sounds`/
-  `tilemaps`/`musics`) — only single-index access. `Music.seqs` is the
-  one exception, since upstream's own tests specifically require slice
-  assignment there.
 - A handful of test-only APIs upstream Pyxel exposes for its own pytest
   suite (e.g. `pyxel.set_btn()`-style input injection,
   `pyxel.utils.list_imported_modules()`) are unsupported — these exist
