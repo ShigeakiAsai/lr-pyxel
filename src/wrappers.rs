@@ -1492,13 +1492,26 @@ pub fn set_input_text(text: &str) {
 }
 
 #[pyfunction]
-pub fn set_dropped_files(files: Vec<String>) {
+pub fn set_dropped_files(files: pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<()> {
+    // Same manual-validation pattern as Image.set()/Tilemap.set(), for
+    // the same reason: PyO3's automatic Vec<String> extraction
+    // produces a different, version-dependent auto-generated message
+    // than upstream's own binding.
+    let items: Vec<String> = files.extract().map_err(|_| {
+        let type_name = files.get_type().name()
+            .map(|n| n.to_string())
+            .unwrap_or_else(|_| "object".to_string());
+        pyo3::exceptions::PyTypeError::new_err(format!(
+            "'{type_name}' object is not an instance of 'Sequence'"
+        ))
+    })?;
     unsafe {
         if PYXEL_READY {
-            let refs: Vec<&str> = files.iter().map(String::as_str).collect();
+            let refs: Vec<&str> = items.iter().map(String::as_str).collect();
             pyxel_core::pyxel().set_dropped_files(&refs);
         }
     }
+    Ok(())
 }
 
 
@@ -1586,9 +1599,22 @@ pub fn title(_title: &str) {
 
 #[pyfunction]
 #[pyo3(signature = (data, scale, colkey=None))]
-pub fn icon(data: Vec<String>, scale: u32, colkey: Option<u8>) {
-    let _ = (data, scale, colkey);
+pub fn icon(data: pyo3::Bound<'_, pyo3::PyAny>, scale: u32, colkey: Option<u8>) -> PyResult<()> {
+    // Same manual-validation pattern as Image.set()/Tilemap.set()/
+    // set_dropped_files() — wrong-type `data` should still raise with
+    // upstream's exact wording, even though this function is itself a
+    // no-op in headless mode.
+    let items: Vec<String> = data.extract().map_err(|_| {
+        let type_name = data.get_type().name()
+            .map(|n| n.to_string())
+            .unwrap_or_else(|_| "object".to_string());
+        pyo3::exceptions::PyTypeError::new_err(format!(
+            "'{type_name}' object is not an instance of 'Sequence'"
+        ))
+    })?;
+    let _ = (items, scale, colkey);
     // no-op in headless mode
+    Ok(())
 }
 
 #[pyfunction]
@@ -1748,12 +1774,28 @@ impl PyImage {
         }
     }
 
-    pub fn set(&self, x: i32, y: i32, data: Vec<String>) {
+    // Takes a raw PyAny (not Vec<String> directly) so the wrong-type
+    // error matches upstream's exact wording ("'int' object is not an
+    // instance of 'Sequence'") rather than PyO3's own auto-generated,
+    // version-dependent message ("argument 'data': 'int' object
+    // cannot be converted to 'Sequence'") that firing on Vec<String>'s
+    // automatic extraction would otherwise produce. Confirmed via
+    // upstream's own test_image_set_wrong_data_type.
+    pub fn set(&self, x: i32, y: i32, data: pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<()> {
+        let items: Vec<String> = data.extract().map_err(|_| {
+            let type_name = data.get_type().name()
+                .map(|n| n.to_string())
+                .unwrap_or_else(|_| "object".to_string());
+            pyo3::exceptions::PyTypeError::new_err(format!(
+                "'{type_name}' object is not an instance of 'Sequence'"
+            ))
+        })?;
         unsafe {
             let img = &mut *self.rc().get();
-            let refs: Vec<&str> = data.iter().map(String::as_str).collect();
+            let refs: Vec<&str> = items.iter().map(String::as_str).collect();
             img.set(x, y, &refs);
         }
+        Ok(())
     }
 
     #[pyo3(signature = (x, y, filename, include_colors=None, incl_colors=None))]
@@ -2440,6 +2482,28 @@ impl PyTilemap {
         unsafe { (&*self.rc().get()).height() }
     }
 
+    // data_ptr() -> ctypes array of c_uint16
+    // Returns the tilemap's raw tile buffer as a live ctypes view (no
+    // copy) — two u16 values per tile (tile_id, color_modifier),
+    // row-major, width*height*2 u16 entries total (row stride =
+    // width*2). Same pattern as Image::data_ptr() above, mirrored
+    // here for Tilemap — confirmed via upstream's own tests
+    // (test_data_ptr_read/_write/_row_stride) that this is expected
+    // to exist, not test-only scaffolding. Used by scripts that need
+    // bulk tile access faster than pset()/pget() one at a time.
+    pub fn data_ptr(&self, py: Python) -> PyResult<PyObject> {
+        unsafe {
+            let tm = &mut *self.rc().get();
+            let size = (tm.width() * tm.height() * 2) as usize;
+            let ptr = tm.data_ptr() as usize;
+            let ctypes = py.import_bound("ctypes")?;
+            let c_uint16 = ctypes.getattr("c_uint16")?;
+            let array_type = c_uint16.call_method1("__mul__", (size,))?;
+            let array = array_type.call_method1("from_address", (ptr,))?;
+            Ok(array.into())
+        }
+    }
+
     // imgsrc can be read/written as either a bank index (int) or an
     // Image instance — previously only the int form worked in either
     // direction. Confirmed via upstream's own tests (test_imgsrc_read_write_image,
@@ -2526,12 +2590,27 @@ impl PyTilemap {
         self.set_imgsrc(img)
     }
 
-    pub fn set(&self, x: i32, y: i32, data: Vec<String>) {
+    // Same manual-validation pattern as Image.set() above, for the
+    // same reason: PyO3's automatic Vec<String> extraction produces a
+    // different, version-dependent auto-generated message than
+    // upstream's own binding. Not currently covered by an upstream
+    // test the way Image.set() is, but fixed here too for consistency
+    // rather than leaving an identical latent gap unaddressed.
+    pub fn set(&self, x: i32, y: i32, data: pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<()> {
+        let items: Vec<String> = data.extract().map_err(|_| {
+            let type_name = data.get_type().name()
+                .map(|n| n.to_string())
+                .unwrap_or_else(|_| "object".to_string());
+            pyo3::exceptions::PyTypeError::new_err(format!(
+                "'{type_name}' object is not an instance of 'Sequence'"
+            ))
+        })?;
         unsafe {
             let tm = &mut *self.rc().get();
-            let refs: Vec<&str> = data.iter().map(String::as_str).collect();
+            let refs: Vec<&str> = items.iter().map(String::as_str).collect();
             tm.set(x, y, &refs);
         }
+        Ok(())
     }
 
     pub fn load(&self, x: i32, y: i32, filename: &str, layer: u32) -> PyResult<()> {

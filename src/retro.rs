@@ -231,13 +231,24 @@ pub unsafe extern "C" fn retro_init() {
     // has manually placed a downloader.pyxapp in ROMS_DIR themselves.
     #[cfg(feature = "lakka")]
     {
-        // Extract the embedded downloader.pyxapp there if it isn't
-        // present yet (first boot, or after an update ships a newer
-        // embedded copy). Previously the person had to place
-        // downloader.pyxapp in ROMS_DIR by hand.
+        // Extract the embedded downloader.pyxapp there if the on-disk
+        // copy doesn't match byte-for-byte (first boot, no file yet,
+        // or a rebuild shipped a changed embedded copy). Compares the
+        // actual embedded bytes directly rather than a separately
+        // computed/stored hash — include_bytes! already gives us the
+        // full contents at compile time, so a direct comparison is
+        // both simpler and strictly more precise than hashing would
+        // be, for a file this small (~10KB). Previously this only
+        // checked existence, so updating downloader.py required
+        // manually deleting the stale extracted copy after every
+        // rebuild before the new one would take effect.
         const DOWNLOADER_PYXAPP: &[u8] = include_bytes!("../downloader.pyxapp");
         let downloader_path = format!("{system_pyxel_dir}/downloader.pyxapp");
-        if !std::path::Path::new(&downloader_path).exists() {
+        let needs_write = match std::fs::read(&downloader_path) {
+            Ok(existing) => existing != DOWNLOADER_PYXAPP,
+            Err(_) => true, // missing, or unreadable for some other reason
+        };
+        if needs_write {
             if let Err(e) = std::fs::write(&downloader_path, DOWNLOADER_PYXAPP) {
                 eprintln!("[lr-pyxel] warning: could not write downloader.pyxapp to \"{downloader_path}\": {e}");
             }

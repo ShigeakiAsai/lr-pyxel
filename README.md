@@ -204,9 +204,9 @@ A couple of narrower, lower-priority gaps, left as v1.0 limitations:
   assignment there.
 - A handful of test-only APIs upstream Pyxel exposes for its own pytest
   suite (e.g. `pyxel.set_btn()`-style input injection,
-  `pyxel.utils.list_imported_modules()`) aren't implemented — these
-  exist to support upstream's own testing infrastructure, not real
-  games, so there's no plan to add them.
+  `pyxel.utils.list_imported_modules()`) are unsupported — these exist
+  to support upstream's own testing infrastructure, not real games, so
+  there's no plan to add them.
 - Save data only persists when a game uses upstream Pyxel's own
   `user_data_dir(vendor_name, app_name)` mechanism. Games that
   implement their own save/config file I/O with bare relative paths
@@ -229,7 +229,9 @@ A couple of narrower, lower-priority gaps, left as v1.0 limitations:
   `pyxel.cli`, don't apply to lr-pyxel's embedded-module architecture
   and were excluded) — gaps found this way have been fixed as they
   turned up. If a script still hits an `AttributeError` or similar,
-  please report it.
+  please report it. See
+  [`tests/upstream_compat/`](tests/upstream_compat/) for the harness
+  and instructions to run it yourself.
 - A few error messages differ in exact wording from upstream (e.g. one
   `TypeError` message that's a PyO3-version-dependent auto-generated
   string) — these are functionally correct (the right exception type
