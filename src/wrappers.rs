@@ -2074,15 +2074,30 @@ impl PyImageList {
         Ok(())
     }
 
-    pub fn __delitem__(&self, idx: i64) -> PyResult<()> {
+    pub fn __delitem__(&self, idx: pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<()> {
         let images = pyxel_core::images();
         let len = images.len() as i64;
-        let i = if idx < 0 { idx + len } else { idx };
-        if i < 0 || i >= len {
-            return Err(pyo3::exceptions::PyIndexError::new_err("image index out of range"));
+        if let Ok(i) = idx.extract::<i64>() {
+            let i = if i < 0 { i + len } else { i };
+            if i < 0 || i >= len {
+                return Err(pyo3::exceptions::PyIndexError::new_err("image index out of range"));
+            }
+            images.remove(i as usize);
+            return Ok(());
         }
-        images.remove(i as usize);
-        Ok(())
+        if let Ok(slice) = idx.downcast::<pyo3::types::PySlice>() {
+            let indices = slice.indices(len)?;
+            if indices.step != 1 {
+                return Err(pyo3::exceptions::PyValueError::new_err(
+                    "extended slices (step != 1) are not supported for images deletion"
+                ));
+            }
+            let start = indices.start.max(0) as usize;
+            let stop = indices.stop.max(indices.start) as usize;
+            images.drain(start..stop);
+            return Ok(());
+        }
+        Err(pyo3::exceptions::PyTypeError::new_err("image index must be an int or slice"))
     }
 
     pub fn __repr__(&self) -> String {
@@ -3184,15 +3199,30 @@ impl PyColors {
         colors.insert(idx, val);
     }
 
-    pub fn __delitem__(&self, idx: i64) -> PyResult<()> {
+    pub fn __delitem__(&self, idx: pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<()> {
         let colors = pyxel_core::colors();
         let len = colors.len() as i64;
-        let i = if idx < 0 { idx + len } else { idx };
-        if i < 0 || i >= len {
-            return Err(pyo3::exceptions::PyIndexError::new_err("list index out of range"));
+        if let Ok(i) = idx.extract::<i64>() {
+            let i = if i < 0 { i + len } else { i };
+            if i < 0 || i >= len {
+                return Err(pyo3::exceptions::PyIndexError::new_err("list index out of range"));
+            }
+            colors.remove(i as usize);
+            return Ok(());
         }
-        colors.remove(i as usize);
-        Ok(())
+        if let Ok(slice) = idx.downcast::<pyo3::types::PySlice>() {
+            let indices = slice.indices(len)?;
+            if indices.step != 1 {
+                return Err(pyo3::exceptions::PyValueError::new_err(
+                    "extended slices (step != 1) are not supported for colors deletion"
+                ));
+            }
+            let start = indices.start.max(0) as usize;
+            let stop = indices.stop.max(indices.start) as usize;
+            colors.drain(start..stop);
+            return Ok(());
+        }
+        Err(pyo3::exceptions::PyTypeError::new_err("colors index must be an int or slice"))
     }
 
     pub fn __repr__(&self) -> String {
@@ -4033,16 +4063,31 @@ impl PyMusicSeqs {
         }
     }
 
-    pub fn __delitem__(&self, idx: i64) -> PyResult<()> {
+    pub fn __delitem__(&self, idx: pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<()> {
         unsafe {
             let music = &mut *self.parent.get();
             let len = music.seqs.len() as i64;
-            let i = if idx < 0 { idx + len } else { idx };
-            if i < 0 || i >= len {
-                return Err(pyo3::exceptions::PyIndexError::new_err("music channel index out of range"));
+            if let Ok(i) = idx.extract::<i64>() {
+                let i = if i < 0 { i + len } else { i };
+                if i < 0 || i >= len {
+                    return Err(pyo3::exceptions::PyIndexError::new_err("music channel index out of range"));
+                }
+                music.seqs.remove(i as usize);
+                return Ok(());
             }
-            music.seqs.remove(i as usize);
-            Ok(())
+            if let Ok(slice) = idx.downcast::<pyo3::types::PySlice>() {
+                let indices = slice.indices(len)?;
+                if indices.step != 1 {
+                    return Err(pyo3::exceptions::PyValueError::new_err(
+                        "extended slices (step != 1) are not supported for Music.seqs deletion"
+                    ));
+                }
+                let start = indices.start.max(0) as usize;
+                let stop = indices.stop.max(indices.start) as usize;
+                music.seqs.drain(start..stop);
+                return Ok(());
+            }
+            Err(pyo3::exceptions::PyTypeError::new_err("music channel index must be an int or slice"))
         }
     }
 
