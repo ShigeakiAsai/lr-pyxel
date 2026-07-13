@@ -4,7 +4,7 @@ A libretro core that runs [Pyxel](https://github.com/kitao/pyxel) games on Retro
 
 [日本語 README](README.ja.md) | [FAQ](FAQ.md)
 
-> **Status**: v0.17.3 tagged, in active development, approaching v1.0.0.
+> **Status**: v0.17.5 tagged, in active development, approaching v1.0.0.
 
 ---
 
@@ -240,7 +240,8 @@ Confirmed working on real hardware (Raspberry Pi 5 / Lakka) or on a
 native Linux RetroArch install:
 
 - Official Pyxel examples: `01_hello_pyxel.py` – `05_color_palette.py`,
-  `07_snake.py`, `11_offscreen.py`, `15_tiled_map_file.py`
+  `07_snake.py`, `11_offscreen.py`, `14_synthesizer.py`,
+  `15_tiled_map_file.py`
 - `mega_wing.pyxapp` (official example)
 - `30sec_of_daylight.pyxapp` (1st Pyxel Jam winner)
 - `laser-jetman.pyxapp`

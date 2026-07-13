@@ -71,41 +71,101 @@ macro_rules! define_live_list {
                 unsafe { (&*self.parent.get()).$field.len() }
             }
 
-            pub fn __getitem__(&self, idx: i64) -> PyResult<$elem> {
+            pub fn __getitem__(&self, py: pyo3::Python, idx: pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<pyo3::PyObject> {
+                use pyo3::IntoPy;
                 unsafe {
                     let v = &(&*self.parent.get()).$field;
                     let len = v.len() as i64;
-                    let i = if idx < 0 { idx + len } else { idx };
-                    if i < 0 || i >= len {
-                        return Err(pyo3::exceptions::PyIndexError::new_err("index out of range"));
+                    if let Ok(i) = idx.extract::<i64>() {
+                        let i = if i < 0 { i + len } else { i };
+                        if i < 0 || i >= len {
+                            return Err(pyo3::exceptions::PyIndexError::new_err("index out of range"));
+                        }
+                        return Ok(v[i as usize].into_py(py));
                     }
-                    Ok(v[i as usize])
+                    if let Ok(slice) = idx.downcast::<pyo3::types::PySlice>() {
+                        let indices = slice.indices(len)?;
+                        let mut result = Vec::new();
+                        let mut i = indices.start;
+                        if indices.step > 0 {
+                            while i < indices.stop {
+                                result.push(v[i as usize]);
+                                i += indices.step;
+                            }
+                        } else if indices.step < 0 {
+                            while i > indices.stop {
+                                result.push(v[i as usize]);
+                                i += indices.step;
+                            }
+                        }
+                        return Ok(result.into_py(py));
+                    }
+                    Err(pyo3::exceptions::PyTypeError::new_err("index must be an int or slice"))
                 }
             }
 
-            pub fn __setitem__(&self, idx: i64, val: $elem) -> PyResult<()> {
+            pub fn __setitem__(&self, idx: pyo3::Bound<'_, pyo3::PyAny>, val: pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<()> {
                 unsafe {
                     let v = &mut (&mut *self.parent.get()).$field;
                     let len = v.len() as i64;
-                    let i = if idx < 0 { idx + len } else { idx };
-                    if i < 0 || i >= len {
-                        return Err(pyo3::exceptions::PyIndexError::new_err("index out of range"));
+                    if let Ok(i) = idx.extract::<i64>() {
+                        let i = if i < 0 { i + len } else { i };
+                        if i < 0 || i >= len {
+                            return Err(pyo3::exceptions::PyIndexError::new_err("index out of range"));
+                        }
+                        v[i as usize] = val.extract::<$elem>()?;
+                        return Ok(());
                     }
-                    v[i as usize] = val;
-                    Ok(())
+                    if let Ok(slice) = idx.downcast::<pyo3::types::PySlice>() {
+                        // Slice assignment (e.g. tone.wavetable[:] = [...]),
+                        // confirmed needed by upstream's own
+                        // 14_synthesizer.py example — this whole macro
+                        // (Sound.notes/tones/volumes/effects,
+                        // Tone.wavetable) was int-only before, discovered
+                        // when that official example hit exactly this
+                        // TypeError. Same indices()+splice() pattern as
+                        // the top-level bank lists (colors etc.).
+                        let indices = slice.indices(len)?;
+                        if indices.step != 1 {
+                            return Err(pyo3::exceptions::PyValueError::new_err(
+                                "extended slices (step != 1) are not supported for assignment"
+                            ));
+                        }
+                        let replacement = val.extract::<Vec<$elem>>()?;
+                        let start = indices.start.max(0) as usize;
+                        let stop = indices.stop.max(indices.start) as usize;
+                        v.splice(start..stop, replacement);
+                        return Ok(());
+                    }
+                    Err(pyo3::exceptions::PyTypeError::new_err("index must be an int or slice"))
                 }
             }
 
-            pub fn __delitem__(&self, idx: i64) -> PyResult<()> {
+            pub fn __delitem__(&self, idx: pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<()> {
                 unsafe {
                     let v = &mut (&mut *self.parent.get()).$field;
                     let len = v.len() as i64;
-                    let i = if idx < 0 { idx + len } else { idx };
-                    if i < 0 || i >= len {
-                        return Err(pyo3::exceptions::PyIndexError::new_err("index out of range"));
+                    if let Ok(i) = idx.extract::<i64>() {
+                        let i = if i < 0 { i + len } else { i };
+                        if i < 0 || i >= len {
+                            return Err(pyo3::exceptions::PyIndexError::new_err("index out of range"));
+                        }
+                        v.remove(i as usize);
+                        return Ok(());
                     }
-                    v.remove(i as usize);
-                    Ok(())
+                    if let Ok(slice) = idx.downcast::<pyo3::types::PySlice>() {
+                        let indices = slice.indices(len)?;
+                        if indices.step != 1 {
+                            return Err(pyo3::exceptions::PyValueError::new_err(
+                                "extended slices (step != 1) are not supported for deletion"
+                            ));
+                        }
+                        let start = indices.start.max(0) as usize;
+                        let stop = indices.stop.max(indices.start) as usize;
+                        v.drain(start..stop);
+                        return Ok(());
+                    }
+                    Err(pyo3::exceptions::PyTypeError::new_err("index must be an int or slice"))
                 }
             }
 
