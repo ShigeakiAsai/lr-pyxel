@@ -2795,15 +2795,37 @@ impl PyTilemapList {
         pyxel_core::tilemaps().len()
     }
 
-    pub fn __getitem__(&self, idx: i64) -> PyResult<PyTilemap> {
-        let len = pyxel_core::tilemaps().len() as i64;
-        let i = if idx < 0 { idx + len } else { idx };
-        if i < 0 || i >= len {
-            return Err(pyo3::exceptions::PyIndexError::new_err(
-                String::from("list index out of range")
-            ));
+    pub fn __getitem__(&self, py: pyo3::Python, idx: pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<pyo3::PyObject> {
+        use pyo3::IntoPy;
+        let tilemaps = pyxel_core::tilemaps();
+        let len = tilemaps.len() as i64;
+        if let Ok(i) = idx.extract::<i64>() {
+            let i = if i < 0 { i + len } else { i };
+            if i < 0 || i >= len {
+                return Err(pyo3::exceptions::PyIndexError::new_err(
+                    String::from("list index out of range")
+                ));
+            }
+            return Ok(PyTilemap { tilemap: tilemaps[i as usize].clone() }.into_py(py));
         }
-        Ok(PyTilemap { tilemap: pyxel_core::tilemaps()[i as usize].clone() })
+        if let Ok(slice) = idx.downcast::<pyo3::types::PySlice>() {
+            let indices = slice.indices(len)?;
+            let mut result = Vec::new();
+            let mut i = indices.start;
+            if indices.step > 0 {
+                while i < indices.stop {
+                    result.push(PyTilemap { tilemap: tilemaps[i as usize].clone() });
+                    i += indices.step;
+                }
+            } else if indices.step < 0 {
+                while i > indices.stop {
+                    result.push(PyTilemap { tilemap: tilemaps[i as usize].clone() });
+                    i += indices.step;
+                }
+            }
+            return Ok(result.into_py(py));
+        }
+        Err(pyo3::exceptions::PyTypeError::new_err("tilemap index must be an int or slice"))
     }
 
     pub fn __setitem__(&self, idx: i64, val: pyo3::PyRef<PyTilemap>) -> PyResult<()> {
@@ -2821,15 +2843,30 @@ impl PyTilemapList {
         Ok(())
     }
 
-    pub fn __delitem__(&self, idx: i64) -> PyResult<()> {
+    pub fn __delitem__(&self, idx: pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<()> {
         let tilemaps = pyxel_core::tilemaps();
         let len = tilemaps.len() as i64;
-        let i = if idx < 0 { idx + len } else { idx };
-        if i < 0 || i >= len {
-            return Err(pyo3::exceptions::PyIndexError::new_err("tilemap index out of range"));
+        if let Ok(i) = idx.extract::<i64>() {
+            let i = if i < 0 { i + len } else { i };
+            if i < 0 || i >= len {
+                return Err(pyo3::exceptions::PyIndexError::new_err("tilemap index out of range"));
+            }
+            tilemaps.remove(i as usize);
+            return Ok(());
         }
-        tilemaps.remove(i as usize);
-        Ok(())
+        if let Ok(slice) = idx.downcast::<pyo3::types::PySlice>() {
+            let indices = slice.indices(len)?;
+            if indices.step != 1 {
+                return Err(pyo3::exceptions::PyValueError::new_err(
+                    "extended slices (step != 1) are not supported for tilemaps deletion"
+                ));
+            }
+            let start = indices.start.max(0) as usize;
+            let stop = indices.stop.max(indices.start) as usize;
+            tilemaps.drain(start..stop);
+            return Ok(());
+        }
+        Err(pyo3::exceptions::PyTypeError::new_err("tilemap index must be an int or slice"))
     }
 
     pub fn __repr__(&self) -> String {
@@ -3247,15 +3284,36 @@ impl PyChannelList {
         pyxel_core::channels().len()
     }
 
-    pub fn __getitem__(&self, idx: i64) -> PyResult<PyChannel> {
+    pub fn __getitem__(&self, py: pyo3::Python, idx: pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<pyo3::PyObject> {
+        use pyo3::IntoPy;
         let len = pyxel_core::channels().len() as i64;
-        let i = if idx < 0 { idx + len } else { idx };
-        if i < 0 || i >= len {
-            return Err(pyo3::exceptions::PyIndexError::new_err(
-                String::from("list index out of range")
-            ));
+        if let Ok(i) = idx.extract::<i64>() {
+            let i = if i < 0 { i + len } else { i };
+            if i < 0 || i >= len {
+                return Err(pyo3::exceptions::PyIndexError::new_err(
+                    String::from("list index out of range")
+                ));
+            }
+            return Ok(PyChannel { channel_ref: ChannelRef::Bank(i as usize) }.into_py(py));
         }
-        Ok(PyChannel { channel_ref: ChannelRef::Bank(i as usize) })
+        if let Ok(slice) = idx.downcast::<pyo3::types::PySlice>() {
+            let indices = slice.indices(len)?;
+            let mut result = Vec::new();
+            let mut i = indices.start;
+            if indices.step > 0 {
+                while i < indices.stop {
+                    result.push(PyChannel { channel_ref: ChannelRef::Bank(i as usize) });
+                    i += indices.step;
+                }
+            } else if indices.step < 0 {
+                while i > indices.stop {
+                    result.push(PyChannel { channel_ref: ChannelRef::Bank(i as usize) });
+                    i += indices.step;
+                }
+            }
+            return Ok(result.into_py(py));
+        }
+        Err(pyo3::exceptions::PyTypeError::new_err("channel index must be an int or slice"))
     }
 
     pub fn __setitem__(&self, idx: pyo3::Bound<'_, pyo3::PyAny>, val: pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<()> {
@@ -3290,15 +3348,30 @@ impl PyChannelList {
         Ok(())
     }
 
-    pub fn __delitem__(&self, idx: i64) -> PyResult<()> {
+    pub fn __delitem__(&self, idx: pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<()> {
         let channels = pyxel_core::channels();
         let len = channels.len() as i64;
-        let i = if idx < 0 { idx + len } else { idx };
-        if i < 0 || i >= len {
-            return Err(pyo3::exceptions::PyIndexError::new_err("channel index out of range"));
+        if let Ok(i) = idx.extract::<i64>() {
+            let i = if i < 0 { i + len } else { i };
+            if i < 0 || i >= len {
+                return Err(pyo3::exceptions::PyIndexError::new_err("channel index out of range"));
+            }
+            channels.remove(i as usize);
+            return Ok(());
         }
-        channels.remove(i as usize);
-        Ok(())
+        if let Ok(slice) = idx.downcast::<pyo3::types::PySlice>() {
+            let indices = slice.indices(len)?;
+            if indices.step != 1 {
+                return Err(pyo3::exceptions::PyValueError::new_err(
+                    "extended slices (step != 1) are not supported for channels deletion"
+                ));
+            }
+            let start = indices.start.max(0) as usize;
+            let stop = indices.stop.max(indices.start) as usize;
+            channels.drain(start..stop);
+            return Ok(());
+        }
+        Err(pyo3::exceptions::PyTypeError::new_err("channel index must be an int or slice"))
     }
 
     pub fn __repr__(&self) -> String {
@@ -3548,15 +3621,36 @@ impl PyToneList {
         pyxel_core::tones().len()
     }
 
-    pub fn __getitem__(&self, idx: i64) -> PyResult<PyTone> {
+    pub fn __getitem__(&self, py: pyo3::Python, idx: pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<pyo3::PyObject> {
+        use pyo3::IntoPy;
         let len = pyxel_core::tones().len() as i64;
-        let i = if idx < 0 { idx + len } else { idx };
-        if i < 0 || i >= len {
-            return Err(pyo3::exceptions::PyIndexError::new_err(
-                String::from("list index out of range")
-            ));
+        if let Ok(i) = idx.extract::<i64>() {
+            let i = if i < 0 { i + len } else { i };
+            if i < 0 || i >= len {
+                return Err(pyo3::exceptions::PyIndexError::new_err(
+                    String::from("list index out of range")
+                ));
+            }
+            return Ok(PyTone { tone_ref: ToneRef::Bank(i as usize) }.into_py(py));
         }
-        Ok(PyTone { tone_ref: ToneRef::Bank(i as usize) })
+        if let Ok(slice) = idx.downcast::<pyo3::types::PySlice>() {
+            let indices = slice.indices(len)?;
+            let mut result = Vec::new();
+            let mut i = indices.start;
+            if indices.step > 0 {
+                while i < indices.stop {
+                    result.push(PyTone { tone_ref: ToneRef::Bank(i as usize) });
+                    i += indices.step;
+                }
+            } else if indices.step < 0 {
+                while i > indices.stop {
+                    result.push(PyTone { tone_ref: ToneRef::Bank(i as usize) });
+                    i += indices.step;
+                }
+            }
+            return Ok(result.into_py(py));
+        }
+        Err(pyo3::exceptions::PyTypeError::new_err("tone index must be an int or slice"))
     }
 
     pub fn __setitem__(&self, idx: pyo3::Bound<'_, pyo3::PyAny>, val: pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<()> {
@@ -3594,15 +3688,30 @@ impl PyToneList {
         Ok(())
     }
 
-    pub fn __delitem__(&self, idx: i64) -> PyResult<()> {
+    pub fn __delitem__(&self, idx: pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<()> {
         let tones = pyxel_core::tones();
         let len = tones.len() as i64;
-        let i = if idx < 0 { idx + len } else { idx };
-        if i < 0 || i >= len {
-            return Err(pyo3::exceptions::PyIndexError::new_err("tone index out of range"));
+        if let Ok(i) = idx.extract::<i64>() {
+            let i = if i < 0 { i + len } else { i };
+            if i < 0 || i >= len {
+                return Err(pyo3::exceptions::PyIndexError::new_err("tone index out of range"));
+            }
+            tones.remove(i as usize);
+            return Ok(());
         }
-        tones.remove(i as usize);
-        Ok(())
+        if let Ok(slice) = idx.downcast::<pyo3::types::PySlice>() {
+            let indices = slice.indices(len)?;
+            if indices.step != 1 {
+                return Err(pyo3::exceptions::PyValueError::new_err(
+                    "extended slices (step != 1) are not supported for tones deletion"
+                ));
+            }
+            let start = indices.start.max(0) as usize;
+            let stop = indices.stop.max(indices.start) as usize;
+            tones.drain(start..stop);
+            return Ok(());
+        }
+        Err(pyo3::exceptions::PyTypeError::new_err("tone index must be an int or slice"))
     }
 
     pub fn __repr__(&self) -> String {
@@ -4043,15 +4152,36 @@ impl PyMusicList {
         pyxel_core::musics().len()
     }
 
-    pub fn __getitem__(&self, idx: i64) -> PyResult<PyMusic> {
+    pub fn __getitem__(&self, py: pyo3::Python, idx: pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<pyo3::PyObject> {
+        use pyo3::IntoPy;
         let len = pyxel_core::musics().len() as i64;
-        let i = if idx < 0 { idx + len } else { idx };
-        if i < 0 || i >= len {
-            return Err(pyo3::exceptions::PyIndexError::new_err(
-                String::from("list index out of range")
-            ));
+        if let Ok(i) = idx.extract::<i64>() {
+            let i = if i < 0 { i + len } else { i };
+            if i < 0 || i >= len {
+                return Err(pyo3::exceptions::PyIndexError::new_err(
+                    String::from("list index out of range")
+                ));
+            }
+            return Ok(PyMusic { music_ref: MusicRef::Bank(i as usize) }.into_py(py));
         }
-        Ok(PyMusic { music_ref: MusicRef::Bank(i as usize) })
+        if let Ok(slice) = idx.downcast::<pyo3::types::PySlice>() {
+            let indices = slice.indices(len)?;
+            let mut result = Vec::new();
+            let mut i = indices.start;
+            if indices.step > 0 {
+                while i < indices.stop {
+                    result.push(PyMusic { music_ref: MusicRef::Bank(i as usize) });
+                    i += indices.step;
+                }
+            } else if indices.step < 0 {
+                while i > indices.stop {
+                    result.push(PyMusic { music_ref: MusicRef::Bank(i as usize) });
+                    i += indices.step;
+                }
+            }
+            return Ok(result.into_py(py));
+        }
+        Err(pyo3::exceptions::PyTypeError::new_err("music index must be an int or slice"))
     }
 
     pub fn __setitem__(&self, idx: i64, val: pyo3::PyRef<PyMusic>) -> PyResult<()> {
@@ -4066,15 +4196,30 @@ impl PyMusicList {
         Ok(())
     }
 
-    pub fn __delitem__(&self, idx: i64) -> PyResult<()> {
+    pub fn __delitem__(&self, idx: pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<()> {
         let musics = pyxel_core::musics();
         let len = musics.len() as i64;
-        let i = if idx < 0 { idx + len } else { idx };
-        if i < 0 || i >= len {
-            return Err(pyo3::exceptions::PyIndexError::new_err("music index out of range"));
+        if let Ok(i) = idx.extract::<i64>() {
+            let i = if i < 0 { i + len } else { i };
+            if i < 0 || i >= len {
+                return Err(pyo3::exceptions::PyIndexError::new_err("music index out of range"));
+            }
+            musics.remove(i as usize);
+            return Ok(());
         }
-        musics.remove(i as usize);
-        Ok(())
+        if let Ok(slice) = idx.downcast::<pyo3::types::PySlice>() {
+            let indices = slice.indices(len)?;
+            if indices.step != 1 {
+                return Err(pyo3::exceptions::PyValueError::new_err(
+                    "extended slices (step != 1) are not supported for musics deletion"
+                ));
+            }
+            let start = indices.start.max(0) as usize;
+            let stop = indices.stop.max(indices.start) as usize;
+            musics.drain(start..stop);
+            return Ok(());
+        }
+        Err(pyo3::exceptions::PyTypeError::new_err("music index must be an int or slice"))
     }
 
     pub fn __repr__(&self) -> String {
