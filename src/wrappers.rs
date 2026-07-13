@@ -2022,16 +2022,37 @@ impl PyImageList {
         pyxel_core::images().len()
     }
 
-    pub fn __getitem__(&self, idx: i64) -> PyResult<PyImage> {
+    pub fn __getitem__(&self, py: pyo3::Python, idx: pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<pyo3::PyObject> {
+        use pyo3::IntoPy;
         let images = pyxel_core::images();
         let len = images.len() as i64;
-        let i = if idx < 0 { idx + len } else { idx };
-        if i < 0 || i >= len {
-            return Err(pyo3::exceptions::PyIndexError::new_err(
-                String::from("list index out of range")
-            ));
+        if let Ok(i) = idx.extract::<i64>() {
+            let i = if i < 0 { i + len } else { i };
+            if i < 0 || i >= len {
+                return Err(pyo3::exceptions::PyIndexError::new_err(
+                    String::from("list index out of range")
+                ));
+            }
+            return Ok(PyImage { image: images[i as usize].clone() }.into_py(py));
         }
-        Ok(PyImage { image: images[i as usize].clone() })
+        if let Ok(slice) = idx.downcast::<pyo3::types::PySlice>() {
+            let indices = slice.indices(len)?;
+            let mut result = Vec::new();
+            let mut i = indices.start;
+            if indices.step > 0 {
+                while i < indices.stop {
+                    result.push(PyImage { image: images[i as usize].clone() });
+                    i += indices.step;
+                }
+            } else if indices.step < 0 {
+                while i > indices.stop {
+                    result.push(PyImage { image: images[i as usize].clone() });
+                    i += indices.step;
+                }
+            }
+            return Ok(result.into_py(py));
+        }
+        Err(pyo3::exceptions::PyTypeError::new_err("image index must be an int or slice"))
     }
 
     pub fn __setitem__(&self, idx: i64, val: pyo3::PyRef<PyImage>) -> PyResult<()> {
@@ -2327,15 +2348,36 @@ impl PySoundList {
         pyxel_core::sounds().len()
     }
 
-    pub fn __getitem__(&self, idx: i64) -> PyResult<PySound> {
+    pub fn __getitem__(&self, py: pyo3::Python, idx: pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<pyo3::PyObject> {
+        use pyo3::IntoPy;
         let len = pyxel_core::sounds().len() as i64;
-        let i = if idx < 0 { idx + len } else { idx };
-        if i < 0 || i >= len {
-            return Err(pyo3::exceptions::PyIndexError::new_err(
-                String::from("list index out of range")
-            ));
+        if let Ok(i) = idx.extract::<i64>() {
+            let i = if i < 0 { i + len } else { i };
+            if i < 0 || i >= len {
+                return Err(pyo3::exceptions::PyIndexError::new_err(
+                    String::from("list index out of range")
+                ));
+            }
+            return Ok(PySound { sound_ref: SoundRef::Bank(i as usize) }.into_py(py));
         }
-        Ok(PySound { sound_ref: SoundRef::Bank(i as usize) })
+        if let Ok(slice) = idx.downcast::<pyo3::types::PySlice>() {
+            let indices = slice.indices(len)?;
+            let mut result = Vec::new();
+            let mut i = indices.start;
+            if indices.step > 0 {
+                while i < indices.stop {
+                    result.push(PySound { sound_ref: SoundRef::Bank(i as usize) });
+                    i += indices.step;
+                }
+            } else if indices.step < 0 {
+                while i > indices.stop {
+                    result.push(PySound { sound_ref: SoundRef::Bank(i as usize) });
+                    i += indices.step;
+                }
+            }
+            return Ok(result.into_py(py));
+        }
+        Err(pyo3::exceptions::PyTypeError::new_err("sound index must be an int or slice"))
     }
 
     pub fn __setitem__(&self, idx: i64, val: pyo3::PyRef<PySound>) -> PyResult<()> {
@@ -2350,15 +2392,30 @@ impl PySoundList {
         Ok(())
     }
 
-    pub fn __delitem__(&self, idx: i64) -> PyResult<()> {
+    pub fn __delitem__(&self, idx: pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<()> {
         let sounds = pyxel_core::sounds();
         let len = sounds.len() as i64;
-        let i = if idx < 0 { idx + len } else { idx };
-        if i < 0 || i >= len {
-            return Err(pyo3::exceptions::PyIndexError::new_err("sound index out of range"));
+        if let Ok(i) = idx.extract::<i64>() {
+            let i = if i < 0 { i + len } else { i };
+            if i < 0 || i >= len {
+                return Err(pyo3::exceptions::PyIndexError::new_err("sound index out of range"));
+            }
+            sounds.remove(i as usize);
+            return Ok(());
         }
-        sounds.remove(i as usize);
-        Ok(())
+        if let Ok(slice) = idx.downcast::<pyo3::types::PySlice>() {
+            let indices = slice.indices(len)?;
+            if indices.step != 1 {
+                return Err(pyo3::exceptions::PyValueError::new_err(
+                    "extended slices (step != 1) are not supported for sounds deletion"
+                ));
+            }
+            let start = indices.start.max(0) as usize;
+            let stop = indices.stop.max(indices.start) as usize;
+            sounds.drain(start..stop);
+            return Ok(());
+        }
+        Err(pyo3::exceptions::PyTypeError::new_err("sound index must be an int or slice"))
     }
 
     pub fn __repr__(&self) -> String {
@@ -3002,14 +3059,35 @@ impl PyColors {
         pyxel_core::colors().len()
     }
 
-    pub fn __getitem__(&self, idx: i64) -> PyResult<u32> {
+    pub fn __getitem__(&self, py: pyo3::Python, idx: pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<pyo3::PyObject> {
+        use pyo3::IntoPy;
         let colors = pyxel_core::colors();
         let len = colors.len() as i64;
-        let i = if idx < 0 { idx + len } else { idx };
-        if i < 0 || i >= len {
-            return Err(pyo3::exceptions::PyIndexError::new_err("list index out of range"));
+        if let Ok(i) = idx.extract::<i64>() {
+            let i = if i < 0 { i + len } else { i };
+            if i < 0 || i >= len {
+                return Err(pyo3::exceptions::PyIndexError::new_err("list index out of range"));
+            }
+            return Ok(colors[i as usize].into_py(py));
         }
-        Ok(colors[i as usize])
+        if let Ok(slice) = idx.downcast::<pyo3::types::PySlice>() {
+            let indices = slice.indices(len)?;
+            let mut result = Vec::new();
+            let mut i = indices.start;
+            if indices.step > 0 {
+                while i < indices.stop {
+                    result.push(colors[i as usize]);
+                    i += indices.step;
+                }
+            } else if indices.step < 0 {
+                while i > indices.stop {
+                    result.push(colors[i as usize]);
+                    i += indices.step;
+                }
+            }
+            return Ok(result.into_py(py));
+        }
+        Err(pyo3::exceptions::PyTypeError::new_err("colors index must be an int or slice"))
     }
 
     pub fn __setitem__(&self, idx: pyo3::Bound<'_, pyo3::PyAny>, val: pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<()> {
@@ -3023,10 +3101,34 @@ impl PyColors {
                 return Err(pyo3::exceptions::PyIndexError::new_err("list index out of range"));
             }
             colors[i as usize] = v;
+        } else if let Ok(slice) = idx.downcast::<pyo3::types::PySlice>() {
+            // Slice assignment: colors[a:b] = [...]. Previously this
+            // branch just did `*pyxel_core::colors() = items`,
+            // replacing the ENTIRE list regardless of the slice's
+            // actual start/stop — colors[0:2] = [x, y] happened to
+            // look correct (colors[0]/[1] matched) but silently wiped
+            // out every other entry, and colors[2:0] = [x] (an
+            // empty-range "insert") produced a 1-element list instead
+            // of inserting. Now uses the same indices()+splice()
+            // pattern as Music.seqs, matching Python's own list
+            // slice-assignment semantics (can change length; an empty
+            // range inserts rather than replaces — confirmed via
+            // upstream's own
+            // test_reversed_step_one_slice_assignment_inserts).
+            let colors_ref = pyxel_core::colors();
+            let len = colors_ref.len() as i64;
+            let indices = slice.indices(len)?;
+            if indices.step != 1 {
+                return Err(pyo3::exceptions::PyValueError::new_err(
+                    "extended slices (step != 1) are not supported for colors assignment"
+                ));
+            }
+            let replacement = val.extract::<Vec<u32>>()?;
+            let start = indices.start.max(0) as usize;
+            let stop = indices.stop.max(indices.start) as usize;
+            colors_ref.splice(start..stop, replacement);
         } else {
-            // Slice assignment: colors[:] = [0x.., 0x.., ...]
-            let items = val.extract::<Vec<u32>>()?;
-            *pyxel_core::colors() = items;
+            return Err(pyo3::exceptions::PyTypeError::new_err("colors index must be an int or slice"));
         }
         Ok(())
     }
