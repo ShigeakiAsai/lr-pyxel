@@ -3332,18 +3332,47 @@ impl PyChannelList {
                 dst.gain   = src.gain;
                 dst.detune = src.detune;
             }
-        } else {
-            // Slice assignment: channels[:] = [ch0, ch1, ...]
+        } else if let Ok(slice) = idx.downcast::<pyo3::types::PySlice>() {
+            // Slice assignment: channels[a:b] = [ch0, ch1, ...].
+            // Previously this ignored the slice's actual start/stop
+            // and always copied into existing slots starting from
+            // position 0 (same class of bug PyColors' __setitem__ had
+            // before v0.17.0 — channels[0:2] = [...] happened to look
+            // right since slots 0/1 matched, but channels[2:4] = [...]
+            // would silently write into slots 0/1 instead). Now
+            // properly respects the slice range and can change the
+            // list's length via splice(), matching Python's own list
+            // slice-assignment semantics. Unlike PyColors (a plain
+            // Vec<u32>, spliced directly), each replacement slot here
+            // must be a freshly created Channel with copied gain/
+            // detune fields (matching append()/insert()'s existing
+            // "copy values into the bank" semantics), not an alias of
+            // the argument's own Rc — each channel bank slot keeps
+            // its own independent identity.
+            let len = pyxel_core::channels().len() as i64;
+            let indices = slice.indices(len)?;
+            if indices.step != 1 {
+                return Err(pyo3::exceptions::PyValueError::new_err(
+                    "extended slices (step != 1) are not supported for channels assignment"
+                ));
+            }
             let items = val.extract::<Vec<pyo3::PyRef<PyChannel>>>()?;
-            for (i, ch) in items.iter().enumerate() {
-                if i >= pyxel_core::channels().len() { break; }
+            let mut fresh_channels = Vec::with_capacity(items.len());
+            for ch in &items {
+                let fresh = pyxel_core::Channel::new();
                 unsafe {
                     let src = &*ch.rc().get();
-                    let dst = &mut *pyxel_core::channels()[i].get();
+                    let dst = &mut *fresh.get();
                     dst.gain   = src.gain;
                     dst.detune = src.detune;
                 }
+                fresh_channels.push(fresh);
             }
+            let start = indices.start.max(0) as usize;
+            let stop = indices.stop.max(indices.start) as usize;
+            pyxel_core::channels().splice(start..stop, fresh_channels);
+        } else {
+            return Err(pyo3::exceptions::PyTypeError::new_err("channel index must be an int or slice"));
         }
         Ok(())
     }
@@ -3670,20 +3699,35 @@ impl PyToneList {
                 dst.gain        = src.gain;
                 dst.wavetable   = src.wavetable.clone();
             }
-        } else {
-            // Slice assignment: tones[:] = [t0, t1, ...]
-            let items = val.extract::<Vec<pyo3::PyRef<PyTone>>>()?;
-            for (i, tone) in items.iter().enumerate() {
-                if i >= pyxel_core::tones().len() { break; }
-                unsafe {
-                    let src = &*tone.rc().get();
-                    let dst = &mut *pyxel_core::tones()[i].get();
-                    dst.mode        = src.mode;
-                    dst.sample_bits = src.sample_bits;
-                    dst.gain        = src.gain;
-                    dst.wavetable   = src.wavetable.clone();
-                }
+        } else if let Ok(slice) = idx.downcast::<pyo3::types::PySlice>() {
+            // Slice assignment: tones[a:b] = [t0, t1, ...]. Same fix
+            // as PyChannelList's __setitem__ — previously ignored the
+            // slice's actual start/stop and always copied into
+            // existing slots starting from position 0. Now properly
+            // respects the slice range and can change the list's
+            // length via splice(), using freshly created Tone slots
+            // (matching append()/insert()'s existing "copy values
+            // into the bank" semantics) rather than aliasing the
+            // argument's own Rc.
+            let len = pyxel_core::tones().len() as i64;
+            let indices = slice.indices(len)?;
+            if indices.step != 1 {
+                return Err(pyo3::exceptions::PyValueError::new_err(
+                    "extended slices (step != 1) are not supported for tones assignment"
+                ));
             }
+            let items = val.extract::<Vec<pyo3::PyRef<PyTone>>>()?;
+            let mut fresh_tones = Vec::with_capacity(items.len());
+            for tone in &items {
+                let fresh = pyxel_core::Tone::new();
+                Self::copy_tone_into(tone, &fresh);
+                fresh_tones.push(fresh);
+            }
+            let start = indices.start.max(0) as usize;
+            let stop = indices.stop.max(indices.start) as usize;
+            pyxel_core::tones().splice(start..stop, fresh_tones);
+        } else {
+            return Err(pyo3::exceptions::PyTypeError::new_err("tone index must be an int or slice"));
         }
         Ok(())
     }
