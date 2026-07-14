@@ -2,7 +2,7 @@
 
 A libretro core that runs [Pyxel](https://github.com/kitao/pyxel) games on RetroArch/Lakka.
 
-[日本語 README](README.ja.md) | [FAQ](FAQ.md)
+[日本語 README](README.ja.md) | [FAQ](FAQ.md) | [Quickstart (no build required)](QUICKSTART.md)
 
 > **Status**: v0.17.5 tagged, in active development, approaching v1.0.0.
 

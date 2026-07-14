@@ -2,7 +2,7 @@
 
 RetroArch/Lakka上で[Pyxel](https://github.com/kitao/pyxel)のゲームを動かすlibretroコアです。
 
-[English README](README.md) | [FAQ](FAQ.ja.md)
+[English README](README.md) | [FAQ](FAQ.ja.md) | [クイックスタート（ビルド不要）](QUICKSTART.ja.md)
 
 > **ステータス**：v0.17.5タグ付け済み、継続開発中。v1.0.0に向けて進行中。
 

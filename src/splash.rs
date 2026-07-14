@@ -48,6 +48,20 @@ pub fn draw() {
     // Cube center y ≈ 58+34 = 92? Let's place at y=52 (between top and bottom)
     let px_start_x = 30i32;
     let px_start_y = 62i32;
+    // Paint the text's own background black first, so the cube's
+    // center vertical line (running straight through this area,
+    // e.g. the front edge at cx=64) doesn't show through the "PYXEL"
+    // lettering. Sized to the text's actual footprint (5 letters *
+    // 3 cols * 4px + 4 gaps * 2px = 68px wide, 5 rows * 4px = 20px
+    // tall) plus 1px padding on each side for the outline's own
+    // ±1px offset.
+    px.draw_rect(
+        (px_start_x - 1) as f32,
+        (px_start_y - 1) as f32,
+        70.0,
+        22.0,
+        0,
+    );
     draw_pyxel_text_outlined(px, px_start_x, px_start_y, 7);
 
     // --- Version bottom right ---
