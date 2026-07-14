@@ -28,7 +28,11 @@ but it keeps things tidy and matches what most guides expect.
 Where that is depends on your Linux install:
 
 - **Flatpak**: `~/.var/app/org.libretro.RetroArch/config/retroarch/cores/`
-- **Native package**: often `~/.config/retroarch/cores/` or `/usr/lib/retroarch/cores/` — check RetroArch's own Directory settings if unsure
+- **Native package (Debian/Ubuntu-based)**: `/usr/lib/x86_64-linux-gnu/libretro/`
+  (confirmed on an actual install — the exact multiarch tuple may differ on
+  other architectures, e.g. `aarch64-linux-gnu`)
+- Not sure? RetroArch's own **Settings → Directory → Cores** menu always
+  shows the exact path for your install.
 
 > lr-pyxel only targets Linux/POSIX RetroArch (see [Known
 > Limitations](README.md#known-limitations) in the main README) —

@@ -1,6 +1,6 @@
 [package]
 name = "lr-pyxel"
-version = "0.18.0"
+version = "0.18.1"
 edition = "2021"
 
 [lib]
@@ -20,7 +20,7 @@ pyo3 = { version = "0.21" }
 blip_buf = "0.1"
 zip = { version = "8.1", default-features = false, features = ["deflate"] }
 libc = "0.2"
-pyxel-core = { git = "https://github.com/ShigeakiAsai/pyxel.git", branch = "lr-pyxel", package = "pyxel-core", features = ["sdl2_static"] }
+pyxel-core = { git = "https://github.com/ShigeakiAsai/pyxel.git", branch = "lr-pyxel", package = "pyxel-core", features = ["sdl2_static", "no_headless_audio"] }
 
 [build-dependencies]
 # Used by build.rs to detect whatever Python version PyO3 actually

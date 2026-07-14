@@ -28,9 +28,11 @@
 置き場所は`Linux`のインストール方法によって異なります。
 
 - **Flatpak版**：`~/.var/app/org.libretro.RetroArch/config/retroarch/cores/`
-- **ネイティブパッケージ**：`~/.config/retroarch/cores/`や
-  `/usr/lib/retroarch/cores/`であることが多いです。不明な場合は`RetroArch`の
-  ディレクトリ設定をご確認ください
+- **ネイティブパッケージ（`Debian`/`Ubuntu`系）**：`/usr/lib/x86_64-linux-gnu/libretro/`
+  （実機で確認済み。`multiarch`のタプル部分は、`CPU`アーキテクチャが
+  違えば`aarch64-linux-gnu`等、別の文字列になります）
+- 不明な場合は、`RetroArch`本体の**Settings → Directory → Cores**メニューで、
+  お使いの環境の正確なパスが確認できます
 
 > `lr-pyxel`は`Linux`/`POSIX`系の`RetroArch`のみを対象としています
 > （本体`README`の[既知の制限事項](README.ja.md#既知の制限事項)参照）——
