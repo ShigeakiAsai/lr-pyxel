@@ -25,6 +25,42 @@ may make it work:
 This isn't a supported, guaranteed-to-work feature of lr-pyxel — it's
 offered as reference information only.
 
+## Q. My game's save data keeps resetting (or crashing)
+
+A. lr-pyxel extracts a `.pyxapp` to a fresh temporary directory on
+*every* load — not just once per RetroArch session, but every single
+time that content is loaded, even reloading the exact same `.pyxapp`
+without restarting RetroArch triggers a new extraction. A game that
+reads/writes its own save or config file with a bare relative path
+(e.g. `open("save.json", "w")`) instead of upstream Pyxel's own
+`user_data_dir(vendor_name, app_name)` mechanism will hit one of three
+symptoms, depending on how it's written:
+
+- **(a) A template save file is bundled in the `.pyxapp`.** The game
+  resets to that template's contents on every load — confirmed
+  on-device: even reloading the same `.pyxapp` without restarting
+  RetroArch was enough to reset a high score, no RetroArch or system
+  restart needed.
+- **(b) The game handles a missing file gracefully** (e.g.
+  `try`/`except FileNotFoundError`, falling back to a default). Same
+  reset-every-time behavior as (a), just without needing a bundled
+  template — no crash, but nothing persists either.
+- **(c) Neither of the above.** The first read of a file that was
+  never bundled and has no fallback logic raises (e.g.
+  `FileNotFoundError`) — since a *fresh* extraction happens on every
+  load, this isn't a one-time failure that then works — it **crashes
+  on every single load**.
+
+### For game authors
+
+If your game needs save data to actually persist under lr-pyxel, use
+upstream Pyxel's own
+[`user_data_dir(vendor_name, app_name)`](https://github.com/kitao/pyxel)
+mechanism instead of a bare relative path. That mechanism resolves to
+a real, persistent, per-application directory rather than the
+game's own temporary extraction folder, and is confirmed to persist
+correctly across reloads under lr-pyxel.
+
 ## Q. A specific game doesn't work. Who should I report it to?
 
 A. First, check whether the same issue reproduces on upstream Pyxel

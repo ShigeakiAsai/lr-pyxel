@@ -195,7 +195,8 @@ rather than crashing or hanging.
   `import pyxel.cli` fails with `ModuleNotFoundError`, which is caught
   and bounces back to the launcher.
 
-A couple of narrower, lower-priority gaps, left as v1.0 limitations:
+A couple of narrower, lower-priority gaps, left as permanent scope
+boundaries:
 
 - A handful of test-only APIs upstream Pyxel exposes for its own pytest
   suite (e.g. `pyxel.set_btn()`-style input injection,
@@ -203,16 +204,13 @@ A couple of narrower, lower-priority gaps, left as v1.0 limitations:
   to support upstream's own testing infrastructure, not real games, so
   there's no plan to add them.
 - Save data only persists when a game uses upstream Pyxel's own
-  `user_data_dir(vendor_name, app_name)` mechanism. Games that
-  implement their own save/config file I/O with bare relative paths
-  (e.g. `open("save.json", "w")`) will find those files don't survive
-  past the current session: `retro_load_game()` sets the working
-  directory to the game's own extraction folder so relative asset
-  paths resolve correctly (e.g. `pyxel.load("assets/foo.pyxres")`),
-  and for `.pyxapp` files that folder is a temporary extraction
-  directory, not persistent storage. This is inherent to how `.pyxapp`
-  extraction works, not something lr-pyxel plans to special-case — if
-  you hit this, please report it to the game's own author.
+  `user_data_dir(vendor_name, app_name)` mechanism. A game that
+  reads/writes its own files with bare relative paths (e.g.
+  `open("save.json", "w")`) instead will find them reset — sometimes
+  worse. See the
+  [FAQ](FAQ.md#q-my-games-save-data-keeps-resetting-or-crashing) for
+  exactly what happens and how a game can avoid it (including notes
+  for game authors).
 
 ---
 
@@ -227,10 +225,6 @@ A couple of narrower, lower-priority gaps, left as v1.0 limitations:
   please report it. See
   [`tests/upstream_compat/`](tests/upstream_compat/) for the harness
   and instructions to run it yourself.
-- A few error messages differ in exact wording from upstream (e.g. one
-  `TypeError` message that's a PyO3-version-dependent auto-generated
-  string) — these are functionally correct (the right exception type
-  is raised), just not verbatim-identical text.
 
 ---
 
