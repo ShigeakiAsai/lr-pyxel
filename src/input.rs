@@ -34,6 +34,15 @@ use pyxel_core::{
     KEY_NUMLOCKCLEAR, KEY_SCROLLLOCK,
     KEY_HELP, KEY_PRINTSCREEN, KEY_SYSREQ, KEY_MENU, KEY_POWER, KEY_UNDO,
     KEY_MUTE, KEY_VOLUMEDOWN, KEY_VOLUMEUP,
+    GAMEPAD1_AXIS_LEFTX, GAMEPAD1_AXIS_LEFTY, GAMEPAD1_AXIS_RIGHTX, GAMEPAD1_AXIS_RIGHTY,
+    GAMEPAD1_AXIS_TRIGGERLEFT, GAMEPAD1_AXIS_TRIGGERRIGHT, GAMEPAD1_BUTTON_Y,
+    GAMEPAD2_BUTTON_A, GAMEPAD2_BUTTON_B, GAMEPAD2_BUTTON_X, GAMEPAD2_BUTTON_Y,
+    GAMEPAD2_BUTTON_BACK, GAMEPAD2_BUTTON_START,
+    GAMEPAD2_BUTTON_DPAD_UP, GAMEPAD2_BUTTON_DPAD_DOWN,
+    GAMEPAD2_BUTTON_DPAD_LEFT, GAMEPAD2_BUTTON_DPAD_RIGHT,
+    GAMEPAD2_BUTTON_LEFTSHOULDER, GAMEPAD2_BUTTON_RIGHTSHOULDER,
+    GAMEPAD2_AXIS_LEFTX, GAMEPAD2_AXIS_LEFTY, GAMEPAD2_AXIS_RIGHTX, GAMEPAD2_AXIS_RIGHTY,
+    GAMEPAD2_AXIS_TRIGGERLEFT, GAMEPAD2_AXIS_TRIGGERRIGHT,
 };
 
 /// Previous frame's keyboard key states, keyed by RETROK_* id — used to
@@ -119,6 +128,12 @@ const RETROK_TABLE: &[(u32, u32)] = &[
 /// Previous frame's button bitmask — used to detect edges (press/release)
 pub static mut PREV_BUTTONS: u32 = 0;
 
+/// Same as PREV_BUTTONS, but for the second controller (port 1 /
+/// GAMEPAD2). Kept as a separate static rather than an array/Vec since
+/// lr-pyxel only supports two controllers total (see KEY_MAP2's own
+/// doc comment for why a third/fourth aren't included yet).
+pub static mut PREV_BUTTONS2: u32 = 0;
+
 /// Accumulated absolute mouse position. RETRO_DEVICE_MOUSE only reports
 /// *relative* motion (dx, dy) per poll, unlike RETRO_DEVICE_JOYPAD's
 /// buttons, so — unlike inject_input() — inject_mouse_input() has to
@@ -147,7 +162,7 @@ const KEY_MAP: &[(u32, u32)] = &[
     (6,  KEY_LEFT),
     (7,  KEY_RIGHT),
     (0,  GAMEPAD1_BUTTON_B),
-    (1,  GAMEPAD1_BUTTON_A),
+    (1,  GAMEPAD1_BUTTON_Y),
     (2,  GAMEPAD1_BUTTON_BACK),
     (3,  GAMEPAD1_BUTTON_START),
     (4,  GAMEPAD1_BUTTON_DPAD_UP),
@@ -158,6 +173,33 @@ const KEY_MAP: &[(u32, u32)] = &[
     (9,  GAMEPAD1_BUTTON_X),
     (10, GAMEPAD1_BUTTON_LEFTSHOULDER),
     (11, GAMEPAD1_BUTTON_RIGHTSHOULDER),
+];
+
+/// libretro joypad bit -> Pyxel button mapping for the second
+/// controller (port 1 / GAMEPAD2). Same bit layout as KEY_MAP, minus
+/// the KEY_Z/KEY_X/KEY_RETURN/etc. keyboard aliases — those exist so a
+/// single physical controller can drive a script written against
+/// keyboard keys, which doesn't make sense to also duplicate for a
+/// second controller (it would just fight over the same key states as
+/// player 1's controller).
+///
+/// Only GAMEPAD1 and GAMEPAD2 are wired up — lr-pyxel doesn't poll
+/// ports 2/3 (GAMEPAD3/GAMEPAD4) at all yet. Extending this to more
+/// players, if ever needed, is straightforward: mirror this same
+/// pattern once more per port.
+const KEY_MAP2: &[(u32, u32)] = &[
+    (0,  GAMEPAD2_BUTTON_B),
+    (1,  GAMEPAD2_BUTTON_Y),
+    (2,  GAMEPAD2_BUTTON_BACK),
+    (3,  GAMEPAD2_BUTTON_START),
+    (4,  GAMEPAD2_BUTTON_DPAD_UP),
+    (5,  GAMEPAD2_BUTTON_DPAD_DOWN),
+    (6,  GAMEPAD2_BUTTON_DPAD_LEFT),
+    (7,  GAMEPAD2_BUTTON_DPAD_RIGHT),
+    (8,  GAMEPAD2_BUTTON_A),
+    (9,  GAMEPAD2_BUTTON_X),
+    (10, GAMEPAD2_BUTTON_LEFTSHOULDER),
+    (11, GAMEPAD2_BUTTON_RIGHTSHOULDER),
 ];
 
 /// Force every tracked key/button into pyxel_core's "released" state.
@@ -189,6 +231,9 @@ pub unsafe fn reset_all_button_states() {
     if !crate::PYXEL_READY { return; }
     let px = pyxel_core::pyxel();
     for &(_, key) in KEY_MAP {
+        px.set_button_state(key, false);
+    }
+    for &(_, key) in KEY_MAP2 {
         px.set_button_state(key, false);
     }
     // Mouse buttons are just as susceptible to the same stuck-press bug
@@ -235,6 +280,21 @@ pub unsafe fn inject_input(buttons: u32) {
         }
     }
     PREV_BUTTONS = buttons;
+}
+
+/// Same as inject_input(), but for the second controller (port 1 /
+/// GAMEPAD2) — see KEY_MAP2's doc comment for why this doesn't also
+/// alias to KEY_Z/KEY_X/etc. the way player 1's does.
+pub unsafe fn inject_input2(buttons: u32) {
+    let px = pyxel_core::pyxel();
+    let changed = buttons ^ PREV_BUTTONS2;
+    for &(bit, key) in KEY_MAP2 {
+        let mask = 1u32 << bit;
+        if changed & mask != 0 {
+            px.set_button_state(key, buttons & mask != 0);
+        }
+    }
+    PREV_BUTTONS2 = buttons;
 }
 
 /// Poll RETRO_DEVICE_MOUSE and feed the result into pyxel_core's mouse
@@ -293,6 +353,113 @@ pub unsafe fn inject_mouse_input(state: unsafe extern "C" fn(u32, u32, u32, u32)
     if wheel_delta != 0 {
         pyxel_core::pyxel().set_button_value(MOUSE_WHEEL_Y, wheel_delta);
     }
+}
+
+/// Poll RETRO_DEVICE_ANALOG (left/right stick X/Y axes, plus L2/R2
+/// analog triggers) and feed the result into pyxel_core's
+/// GAMEPAD1_AXIS_* button-value state. Call once per retro_run()
+/// frame, alongside inject_input(), inject_mouse_input(), and
+/// inject_keyboard_input(). Safe to call even with no analog sticks/
+/// triggers physically present — RetroArch just reports 0 in that case.
+///
+/// Found missing when Kanixian240.py's use of btnv(GAMEPAD1_AXIS_LEFTY)
+/// for analog movement silently always read 0 (no crash — btnv()
+/// itself was already implemented — the gap was that nothing upstream
+/// of it ever polled RETRO_DEVICE_ANALOG or wrote the result in).
+///
+/// Values are passed through unchanged from libretro's own raw i16
+/// range — matching what a script written against upstream
+/// (SDL2-backed) Pyxel already expects from btnv(GAMEPAD1_AXIS_*), so
+/// no rescaling is needed. Unlike the mouse wheel above (a per-frame
+/// delta that pyxel_core resets to 0 on its own), an analog axis is a
+/// continuous physical reading, so this reports the current value
+/// every frame rather than only on change.
+///
+/// L2/R2 aren't separate RETRO_DEVICE_ANALOG indices the way the two
+/// sticks are — libretro reads analog trigger pressure through the
+/// *same* device, using RETRO_DEVICE_INDEX_ANALOG_BUTTON (2) as the
+/// index and the JOYPAD button's own id (L2/R2) as the id, rather than
+/// a dedicated X/Y pair. Confirmed against libretro.h directly:
+/// RETRO_DEVICE_INDEX_ANALOG_BUTTON == 2, and RETRO_DEVICE_ID_JOYPAD_L2/
+/// R2 (12/13) double as its id values, per libretro.h's own comment
+/// ("Also used as id values for RETRO_DEVICE_INDEX_ANALOG_BUTTON").
+pub unsafe fn inject_gamepad_axis_input(state: unsafe extern "C" fn(u32, u32, u32, u32) -> i16) {
+    // libretro.h device/index/id constants for RETRO_DEVICE_ANALOG.
+    // Defined locally, matching inject_mouse_input()'s own convention.
+    const RETRO_DEVICE_JOYPAD: u32   = 1;
+    const RETRO_DEVICE_ANALOG: u32   = 5;
+    const INDEX_ANALOG_LEFT: u32     = 0;
+    const INDEX_ANALOG_RIGHT: u32    = 1;
+    const INDEX_ANALOG_BUTTON: u32   = 2;
+    const ID_ANALOG_X: u32           = 0;
+    const ID_ANALOG_Y: u32           = 1;
+    const ID_JOYPAD_L2: u32          = 12;
+    const ID_JOYPAD_R2: u32          = 13;
+
+    let poll = |index: u32, id: u32| i32::from(state(0, RETRO_DEVICE_ANALOG, index, id));
+
+    // Not every frontend/driver combination reports analog trigger
+    // pressure (RETRO_DEVICE_INDEX_ANALOG_BUTTON is a newer addition
+    // to the libretro API than the analog sticks themselves) — if it
+    // reports exactly 0, fall back to the plain digital JOYPAD press
+    // and report "fully pressed" instead of silently reading as not
+    // pressed at all. Mirrors the fallback pattern in libretro's own
+    // reference implementation (docs.libretro.com's Input API page).
+    let poll_trigger = |id: u32| {
+        let analog = poll(INDEX_ANALOG_BUTTON, id);
+        if analog != 0 {
+            analog
+        } else if state(0, RETRO_DEVICE_JOYPAD, 0, id) != 0 {
+            i32::from(i16::MAX)
+        } else {
+            0
+        }
+    };
+
+    let px = pyxel_core::pyxel();
+    px.set_button_value(GAMEPAD1_AXIS_LEFTX,  poll(INDEX_ANALOG_LEFT,  ID_ANALOG_X));
+    px.set_button_value(GAMEPAD1_AXIS_LEFTY,  poll(INDEX_ANALOG_LEFT,  ID_ANALOG_Y));
+    px.set_button_value(GAMEPAD1_AXIS_RIGHTX, poll(INDEX_ANALOG_RIGHT, ID_ANALOG_X));
+    px.set_button_value(GAMEPAD1_AXIS_RIGHTY, poll(INDEX_ANALOG_RIGHT, ID_ANALOG_Y));
+    px.set_button_value(GAMEPAD1_AXIS_TRIGGERLEFT,  poll_trigger(ID_JOYPAD_L2));
+    px.set_button_value(GAMEPAD1_AXIS_TRIGGERRIGHT, poll_trigger(ID_JOYPAD_R2));
+}
+
+/// Same as inject_gamepad_axis_input(), but for the second controller
+/// (port 1 / GAMEPAD2) — see KEY_MAP2's doc comment for the same
+/// two-players-only scope note.
+pub unsafe fn inject_gamepad2_axis_input(state: unsafe extern "C" fn(u32, u32, u32, u32) -> i16) {
+    const RETRO_DEVICE_JOYPAD: u32   = 1;
+    const RETRO_DEVICE_ANALOG: u32   = 5;
+    const INDEX_ANALOG_LEFT: u32     = 0;
+    const INDEX_ANALOG_RIGHT: u32    = 1;
+    const INDEX_ANALOG_BUTTON: u32   = 2;
+    const ID_ANALOG_X: u32           = 0;
+    const ID_ANALOG_Y: u32           = 1;
+    const ID_JOYPAD_L2: u32          = 12;
+    const ID_JOYPAD_R2: u32          = 13;
+    const PORT: u32                  = 1;
+
+    let poll = |index: u32, id: u32| i32::from(state(PORT, RETRO_DEVICE_ANALOG, index, id));
+
+    let poll_trigger = |id: u32| {
+        let analog = poll(INDEX_ANALOG_BUTTON, id);
+        if analog != 0 {
+            analog
+        } else if state(PORT, RETRO_DEVICE_JOYPAD, 0, id) != 0 {
+            i32::from(i16::MAX)
+        } else {
+            0
+        }
+    };
+
+    let px = pyxel_core::pyxel();
+    px.set_button_value(GAMEPAD2_AXIS_LEFTX,  poll(INDEX_ANALOG_LEFT,  ID_ANALOG_X));
+    px.set_button_value(GAMEPAD2_AXIS_LEFTY,  poll(INDEX_ANALOG_LEFT,  ID_ANALOG_Y));
+    px.set_button_value(GAMEPAD2_AXIS_RIGHTX, poll(INDEX_ANALOG_RIGHT, ID_ANALOG_X));
+    px.set_button_value(GAMEPAD2_AXIS_RIGHTY, poll(INDEX_ANALOG_RIGHT, ID_ANALOG_Y));
+    px.set_button_value(GAMEPAD2_AXIS_TRIGGERLEFT,  poll_trigger(ID_JOYPAD_L2));
+    px.set_button_value(GAMEPAD2_AXIS_TRIGGERRIGHT, poll_trigger(ID_JOYPAD_R2));
 }
 
 /// Poll RETRO_DEVICE_KEYBOARD and feed the result into pyxel_core's key

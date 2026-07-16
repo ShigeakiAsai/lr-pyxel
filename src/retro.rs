@@ -1145,13 +1145,30 @@ pub unsafe extern "C" fn retro_run() {
         }
     }
 
-    // 3. SELECT (bit 2) → shutdown
-    if buttons & (1 << 2) != 0 {
-        if let Some(env) = ENVIRON_CB {
-            env(rust_libretro_sys::RETRO_ENVIRONMENT_SHUTDOWN, std::ptr::null_mut());
+    // 2b. Same, for the second controller (port 1 / GAMEPAD2). SELECT
+    // (below) intentionally only checks port 0's bitmask — only
+    // player 1's SELECT shuts down the core, matching the existing
+    // single-shutdown-source design; a second controller's SELECT
+    // press just reaches its own game-side button state instead.
+    let mut buttons2: u32 = 0;
+    if let Some(state) = INPUT_STATE {
+        for bit in 0u32..16 {
+            if state(1, rust_libretro_sys::RETRO_DEVICE_JOYPAD, 0, bit) != 0 {
+                buttons2 |= 1 << bit;
+            }
         }
-        return;
     }
+
+    // Design note: SELECT used to trigger RETRO_ENVIRONMENT_SHUTDOWN
+    // immediately here (an early lr-pyxel design decision) — removed.
+    // SELECT now just flows through inject_input() as
+    // GAMEPAD1_BUTTON_BACK like any other button; ending a game is
+    // left to the game itself (pyxel.quit()) or to RetroArch's own
+    // Quick Menu. This matches upstream Pyxel's own design (which has
+    // no special "hung script" recovery mechanism of its own either)
+    // and avoids lr-pyxel inventing its own exit convention on top of
+    // RetroArch's existing one. See README.md's "Design Notes" section
+    // for the user-facing side of this change.
 
     if !PYXEL_READY {
         video::submit_fallback_frame();
@@ -1202,9 +1219,12 @@ pub unsafe extern "C" fn retro_run() {
 
     // Always inject input every frame
     input::inject_input(buttons);
+    input::inject_input2(buttons2);
     if let Some(state) = INPUT_STATE {
         input::inject_mouse_input(state);
         input::inject_keyboard_input(state);
+        input::inject_gamepad_axis_input(state);
+        input::inject_gamepad2_axis_input(state);
     }
 
     // Check if frontend requested a content load

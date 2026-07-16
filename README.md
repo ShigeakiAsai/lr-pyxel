@@ -214,6 +214,19 @@ boundaries:
 
 ---
 
+## Design Notes
+
+- **SELECT no longer ends content.** Earlier development versions had
+  SELECT immediately shut lr-pyxel down (via `RETRO_ENVIRONMENT_SHUTDOWN`)
+  the moment it was pressed, before a script ever saw it. This has been
+  changed: SELECT now just flows through to the running script as
+  `pyxel.GAMEPAD1_BUTTON_BACK` / `GAMEPAD2_BUTTON_BACK`, like any other
+  button — lr-pyxel no longer intercepts it. A game that wants to end
+  itself should call `pyxel.quit()`; otherwise, use RetroArch's own
+  Quick Menu to close the content.
+
+---
+
 ## Known Issues
 
 - The Python API surface has been cross-checked against upstream
