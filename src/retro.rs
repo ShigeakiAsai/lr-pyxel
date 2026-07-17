@@ -339,7 +339,7 @@ pub unsafe extern "C" fn retro_init() {
     // up the same way — sys.stdout ended up defaulting to the 'ascii'
     // codec, so `print("日本語")`-style output (or any implicit-encoding
     // text I/O) raised UnicodeEncodeError. Must be set before
-    // prepare_freethreaded_python() so CPython's own startup sees it.
+    // Python::initialize() so CPython's own startup sees it.
     std::env::set_var("PYTHONUTF8", "1");
 
     // Lakka-LibreELEC patches CPython's own source
@@ -351,11 +351,11 @@ pub unsafe extern "C" fn retro_init() {
     // kind. Found via a custom test harness built to run upstream
     // Pyxel's own pytest suite inside lr-pyxel: a deliberately-false
     // canary assert(1 == 2) never raised. Py_OptimizeFlag is a plain
-    // exported C global (not something PyO3's prepare_freethreaded_python()
+    // exported C global (not something PyO3's Python::initialize()
     // exposes a config knob for), so it's reset directly via FFI before
     // the interpreter starts, undoing Lakka's patched default back to
     // upstream CPython's normal behavior. Must happen before
-    // prepare_freethreaded_python(), since Py_OptimizeFlag is read once
+    // Python::initialize(), since Py_OptimizeFlag is read once
     // during interpreter startup and baked into how every subsequent
     // compile() call treats assert/__debug__ for the rest of the
     // process's life.
@@ -391,7 +391,7 @@ pub unsafe extern "C" fn retro_init() {
     }
 
     // Start Python interpreter (after append_to_inittab)
-    pyo3::prepare_freethreaded_python();
+    pyo3::Python::initialize();
 
     // The PYTHONUTF8 env var above didn't actually change sys.stdout's
     // encoding for this embedded interpreter (confirmed: still failed
@@ -402,12 +402,12 @@ pub unsafe extern "C" fn retro_init() {
     // stderr after the interpreter starts is more direct and reliable:
     // it doesn't depend on however CPython's config resolution handled
     // (or didn't handle) the env var in this embedding context.
-    Python::with_gil(|py| {
-        if let Ok(sys) = py.import_bound("sys") {
+    Python::attach(|py| {
+        if let Ok(sys) = py.import("sys") {
             for stream_name in ["stdout", "stderr"] {
                 if let Ok(stream) = sys.getattr(stream_name) {
                     if stream.hasattr("reconfigure").unwrap_or(false) {
-                        let kwargs = pyo3::types::PyDict::new_bound(py);
+                        let kwargs = pyo3::types::PyDict::new(py);
                         let _ = kwargs.set_item("encoding", "utf-8");
                         let _ = kwargs.set_item("errors", "backslashreplace");
                         let _ = stream.call_method("reconfigure", (), Some(&kwargs));
@@ -447,9 +447,14 @@ pub unsafe extern "C" fn retro_init() {
     // per-game sys.modules cleanup, so one install here covers every
     // game loaded for the rest of this process's life.
     const PYGAME_BLOCK_PY: &str = include_str!("../pygame_block.py");
-    Python::with_gil(|py| {
-        let globals = pyo3::types::PyDict::new_bound(py);
-        if let Err(e) = py.run_bound(PYGAME_BLOCK_PY, Some(&globals), None) {
+    Python::attach(|py| {
+        let globals = pyo3::types::PyDict::new(py);
+        // py.run() now requires &CStr (PyO3 0.29) rather than &str.
+        // PYGAME_BLOCK_PY comes from include_str!, which has no
+        // compile-time nul terminator, so it's converted to a CString
+        // here (once, at interpreter-startup time — not a hot path).
+        let code = std::ffi::CString::new(PYGAME_BLOCK_PY).expect("pygame_block.py contains a nul byte");
+        if let Err(e) = py.run(&code, Some(&globals), None) {
             eprintln!("[lr-pyxel] warning: failed to install pygame import blocker:");
             e.print(py);
         }
@@ -464,10 +469,10 @@ pub unsafe extern "C" fn retro_init() {
     // extraction dir) — no per-game re-wiring needed. Lakka-only, see
     // site_packages_dir's own comment above for why.
     #[cfg(feature = "lakka")]
-    Python::with_gil(|py| {
-        if let Ok(sys) = py.import_bound("sys") {
+    Python::attach(|py| {
+        if let Ok(sys) = py.import("sys") {
             if let Ok(syspath) = sys.getattr("path") {
-                if let Ok(syspath) = syspath.downcast_into::<pyo3::types::PyList>() {
+                if let Ok(syspath) = syspath.cast_into::<pyo3::types::PyList>() {
                     if let Err(e) = syspath.insert(0, site_packages_dir.clone()) {
                         eprintln!("[lr-pyxel] warning: failed to add site-packages dir to sys.path: {e}");
                     }
@@ -480,7 +485,7 @@ pub unsafe extern "C" fn retro_init() {
 #[no_mangle]
 pub unsafe extern "C" fn retro_deinit() {
     // Drop Py<PyAny> inside GIL to avoid double-free
-    Python::with_gil(|_py| {
+    Python::attach(|_py| {
         PY_UPDATE = None;
         PY_DRAW   = None;
     });
@@ -588,7 +593,7 @@ unsafe fn reset_channel_gains() {
 // back to the previous generic message.
 unsafe fn script_error_message(py: Python, e: &pyo3::PyErr) -> String {
     if e.is_instance_of::<pyo3::exceptions::PyModuleNotFoundError>(py) {
-        if let Some(name) = e.value_bound(py).getattr("name").ok()
+        if let Some(name) = e.value(py).getattr("name").ok()
             .and_then(|n| n.extract::<String>().ok())
         {
             return format!("Missing module: {name} (see log for details)");
@@ -965,7 +970,7 @@ pub unsafe extern "C" fn retro_load_game(game: *const c_void) -> bool {
         env(37, &geometry as *const _ as *mut c_void);
     }
 
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         // Drop previous game callbacks inside GIL to avoid double-free
         PY_UPDATE = None;
         PY_DRAW   = None;
@@ -982,9 +987,9 @@ pub unsafe extern "C" fn retro_load_game(game: *const c_void) -> bool {
         // Clear cached modules from previous game to prevent import conflicts.
         // Without this, modules like 'constants' from game A would be reused
         // when game B tries to import its own 'constants' module.
-        if let Ok(sys) = pyo3::Python::import_bound(py, "sys") {
+        if let Ok(sys) = pyo3::Python::import(py, "sys") {
             if let Ok(modules) = sys.getattr("modules") {
-                if let Ok(modules_dict) = modules.downcast_into::<pyo3::types::PyDict>() {
+                if let Ok(modules_dict) = modules.cast_into::<pyo3::types::PyDict>() {
                     // Keep only stdlib, built-in, and vendor modules, remove
                     // game modules. Vendor packages (numpy etc.) should
                     // survive this cleanup: they're meant to be shared
@@ -1035,9 +1040,9 @@ pub unsafe extern "C" fn retro_load_game(game: *const c_void) -> bool {
         // First, remove any previous game directories from sys.path to prevent
         // module name conflicts between different games (problem: laser-jetman
         // importing cursed_caverns' constants.py)
-        let sys     = py.import_bound("sys").expect("failed to import sys");
+        let sys     = py.import("sys").expect("failed to import sys");
         let syspath = sys.getattr("path").unwrap();
-        let syspath = syspath.downcast_into::<pyo3::types::PyList>().unwrap();
+        let syspath = syspath.cast_into::<pyo3::types::PyList>().unwrap();
 
         // Remove all /tmp/lr-pyxel/ entries from sys.path
         let mut i = 0;
@@ -1065,12 +1070,12 @@ pub unsafe extern "C" fn retro_load_game(game: *const c_void) -> bool {
 
         // Set sys.argv to the ORIGINAL content path — see the matching
         // comment in load_game_from_path() for why.
-        let argv = pyo3::types::PyList::new_bound(py, [&path]);
+        let argv = pyo3::types::PyList::new(py, [&path]).unwrap();
         let _ = sys.setattr("argv", argv);
 
         // Execute the game script
         let code    = std::fs::read_to_string(&script_path).unwrap_or_default();
-        let globals = pyo3::types::PyDict::new_bound(py);
+        let globals = pyo3::types::PyDict::new(py);
         let _ = globals.set_item("__name__", "__main__");
         // __file__ isn't set automatically since the script runs from a
         // string (py.run_bound), not as a real file the interpreter
@@ -1081,7 +1086,7 @@ pub unsafe extern "C" fn retro_load_game(game: *const c_void) -> bool {
         let _ = globals.set_item("__file__", &script_path);
         // Explicitly provide the real builtins module. Without this,
         // CPython auto-inserts *something* for the top-level script
-        // executed via py.run_bound(), but modules subsequently imported
+        // executed via py.run(), but modules subsequently imported
         // normally (e.g. a sibling module doing `import other_module`,
         // which itself calls open() at its own module level) ended up
         // without a working `open` — TypeError: 'NoneType' object is
@@ -1091,11 +1096,15 @@ pub unsafe extern "C" fn retro_load_game(game: *const c_void) -> bool {
         // calls open() during its own import — fails only in that
         // nested-import scenario, not when open() is called directly
         // from the top-level script itself.
-        if let Ok(builtins) = py.import_bound("builtins") {
+        if let Ok(builtins) = py.import("builtins") {
             let _ = globals.set_item("__builtins__", builtins);
         }
 
-        match py.run_bound(&code, Some(&globals), None) {
+        // py.run() requires &CStr (PyO3 0.29); `code` is a dynamically
+        // loaded script (not a compile-time literal), so it needs its
+        // own CString conversion here rather than a c"..." literal.
+        let code = std::ffi::CString::new(code).unwrap_or_default();
+        match py.run(&code, Some(&globals), None) {
             Ok(_) => {
                 // If pyxel.run(update, draw) was called during script execution
                 // (class-based games), PY_UPDATE/PY_DRAW are already set.
@@ -1103,12 +1112,12 @@ pub unsafe extern "C" fn retro_load_game(game: *const c_void) -> bool {
                 if PY_UPDATE.is_none() {
                     PY_UPDATE = globals.get_item("update").ok()
                         .flatten()
-                        .map(|f| f.into_py(py));
+                        .map(|f| f.unbind());
                 }
                 if PY_DRAW.is_none() {
                     PY_DRAW = globals.get_item("draw").ok()
                         .flatten()
-                        .map(|f| f.into_py(py));
+                        .map(|f| f.unbind());
                 }
             }
             Err(e) => {
@@ -1123,7 +1132,7 @@ pub unsafe extern "C" fn retro_load_game(game: *const c_void) -> bool {
 
 #[no_mangle]
 pub unsafe extern "C" fn retro_unload_game() {
-    Python::with_gil(|_py| {
+    Python::attach(|_py| {
         PY_UPDATE = None;
         PY_DRAW   = None;
     });
@@ -1198,7 +1207,7 @@ pub unsafe extern "C" fn retro_run() {
             // logic keyed on "every N frames starting from frame 0" (e.g.
             // 15_tiled_map_file.py's `if frame_count % 240 == 0`) only
             // fired once N frames had already elapsed, not immediately.
-            Python::with_gil(|py| {
+            Python::attach(|py| {
                 if let Some(ref update) = PY_UPDATE {
                     if let Err(e) = update.call0(py) { e.print(py); }
                 }
@@ -1304,17 +1313,20 @@ unsafe fn launch_frontend() {
         };
         env(37, &geometry as *const _ as *mut c_void);
     }
-    Python::with_gil(|py| {
-        let globals = pyo3::types::PyDict::new_bound(py);
+    Python::attach(|py| {
+        let globals = pyo3::types::PyDict::new(py);
         let _ = globals.set_item("__name__", "__main__");
         // See the __builtins__ comment in load_game_from_path() — same
         // fix applied here for consistency, in case frontend.py ever
         // imports something that triggers the nested-import/open()
         // pattern.
-        if let Ok(builtins) = py.import_bound("builtins") {
+        if let Ok(builtins) = py.import("builtins") {
             let _ = globals.set_item("__builtins__", builtins);
         }
-        match py.run_bound(FRONTEND_PY, Some(&globals), None) {
+        // py.run() requires &CStr (PyO3 0.29) — see the pygame_block.py
+        // note above for why this is converted at the call site.
+        let code = std::ffi::CString::new(FRONTEND_PY).expect("frontend.py contains a nul byte");
+        match py.run(&code, Some(&globals), None) {
             Ok(_) => {
                 if PY_UPDATE.is_none() {
                     PY_UPDATE = globals.get_item("update").ok()
@@ -1401,7 +1413,7 @@ unsafe fn load_game_from_path(path: &str) {
     }
 
     // Execute the script
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         // Clear cached modules from the previous game to prevent import
         // conflicts. Previously this only removed math/random/struct
         // (the stub modules); any other same-named module left behind by
@@ -1413,9 +1425,9 @@ unsafe fn load_game_from_path(path: &str) {
         // it could stall before ever reaching pyxel.run()). This mirrors
         // the thorough cleanup already used in retro_load_game()'s
         // direct-game-load branch.
-        if let Ok(sys) = py.import_bound("sys") {
+        if let Ok(sys) = py.import("sys") {
             if let Ok(modules) = sys.getattr("modules") {
-                if let Ok(modules_dict) = modules.downcast_into::<pyo3::types::PyDict>() {
+                if let Ok(modules_dict) = modules.cast_into::<pyo3::types::PyDict>() {
                     // Vendor packages should survive this cleanup too — see
                     // should_keep_vendor_module()'s comment above.
                     let keys_to_remove: Vec<String> = modules_dict
@@ -1443,7 +1455,7 @@ unsafe fn load_game_from_path(path: &str) {
             }
             // Update sys.path
             if let Ok(path_attr) = sys.getattr("path") {
-                if let Ok(syspath) = path_attr.downcast_into::<pyo3::types::PyList>() {
+                if let Ok(syspath) = path_attr.cast_into::<pyo3::types::PyList>() {
                     let game_dir = std::path::Path::new(&script_path)
                         .parent()
                         .unwrap_or(std::path::Path::new("."))
@@ -1464,11 +1476,11 @@ unsafe fn load_game_from_path(path: &str) {
             // filling up /tmp) check sys.argv for the original
             // invocation path to locate that sibling folder. Harmless
             // for any script that doesn't look at sys.argv at all.
-            let argv = pyo3::types::PyList::new_bound(py, [path]);
+            let argv = pyo3::types::PyList::new(py, [path]).unwrap();
             let _ = sys.setattr("argv", argv);
         }
         if let Ok(code) = std::fs::read_to_string(&script_path) {
-            let globals = pyo3::types::PyDict::new_bound(py);
+            let globals = pyo3::types::PyDict::new(py);
             let _ = globals.set_item("__name__", "__main__");
             // See the comment in retro_load_game()'s direct-load branch:
             // __file__ isn't set automatically since the script runs
@@ -1480,10 +1492,13 @@ unsafe fn load_game_from_path(path: &str) {
             // script (not the script itself) could end up with a broken
             // `open`/`io.open` — TypeError: 'NoneType' object is not
             // callable.
-            if let Ok(builtins) = py.import_bound("builtins") {
+            if let Ok(builtins) = py.import("builtins") {
                 let _ = globals.set_item("__builtins__", builtins);
             }
-            match py.run_bound(&code, Some(&globals), None) {
+            // py.run()/py.eval() require &CStr (PyO3 0.29) — same
+            // reasoning as the other call sites in this file.
+            let code = std::ffi::CString::new(code).unwrap_or_default();
+            match py.run(&code, Some(&globals), None) {
                 Ok(_) => {
                     // pyxel.run() may have already set PY_UPDATE/PY_DRAW.
                     // Only fall back to globals if not set.
@@ -1497,7 +1512,7 @@ unsafe fn load_game_from_path(path: &str) {
                     }
                     // If still not set, use noop
                     if PY_UPDATE.is_none() {
-                        let noop = py.eval_bound("lambda: None", None, None).unwrap();
+                        let noop = py.eval(c"lambda: None", None, None).unwrap();
                         PY_UPDATE = Some(noop.clone().into());
                         PY_DRAW   = Some(noop.into());
                     }

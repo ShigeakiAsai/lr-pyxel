@@ -9,9 +9,21 @@
 // (e.g. `cargo build` on Ubuntu 24.04, no cross-compile env vars set)
 // it resolves to whatever `python3` on PATH actually is (e.g. "3.12"),
 // with no code changes needed either place.
+//
+// PyO3 0.29 change: pyo3-build-config no longer resolves/inlines the
+// interpreter config itself. Instead, pyo3-ffi's own build script
+// resolves it and serializes it into the DEP_PYTHON_PYO3_CONFIG env
+// var (visible here because this crate already depends on `pyo3`,
+// which pulls in pyo3-ffi). InterpreterConfig::from_cargo_dep_env()
+// reads that env var back out. This function is #[doc(hidden)] in
+// pyo3-build-config (not officially stable API), but it's the same
+// mechanism PyO3 itself relies on internally, matching the intent
+// described in the 0.29 migration guide.
 
 fn main() {
-    let config = pyo3_build_config::get();
+    let config = pyo3_build_config::InterpreterConfig::from_cargo_dep_env()
+        .expect("DEP_PYTHON_PYO3_CONFIG is not set — is `pyo3` (or `pyo3-ffi`) a dependency?")
+        .expect("failed to parse pyo3's interpreter config");
     println!(
         "cargo:rustc-env=LR_PYXEL_PYTHON_VERSION={}.{}",
         config.version.major, config.version.minor

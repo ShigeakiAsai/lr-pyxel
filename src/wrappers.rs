@@ -41,8 +41,8 @@ fn warn_deprecated_once(key: &'static str, message: &str) {
             // string (e.g. "Tone.noise is deprecated. Use Tone.mode
             // instead.\n"), so every call site below passes the exact
             // upstream wording, not a paraphrase.
-            pyo3::Python::with_gil(|py| {
-                if let Ok(builtins) = py.import_bound("builtins") {
+            pyo3::Python::attach(|py| {
+                if let Ok(builtins) = py.import("builtins") {
                     if let Ok(print_fn) = builtins.getattr("print") {
                         let _ = print_fn.call1((message,));
                     }
@@ -109,8 +109,7 @@ macro_rules! define_live_list {
                 }
             }
 
-            pub fn __getitem__(&self, py: pyo3::Python, idx: pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<pyo3::PyObject> {
-                use pyo3::IntoPy;
+            pub fn __getitem__(&self, py: pyo3::Python, idx: pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<pyo3::Py<pyo3::PyAny>> {
                 {
                     let guard = self.parent.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                     let v = &guard.$field;
@@ -120,10 +119,10 @@ macro_rules! define_live_list {
                         if i < 0 || i >= len {
                             return Err(pyo3::exceptions::PyIndexError::new_err("index out of range"));
                         }
-                        return Ok(v[i as usize].into_py(py));
+                        return Ok(v[i as usize].into_pyobject(py)?.into_any().unbind());
                     }
-                    if let Ok(slice) = idx.downcast::<pyo3::types::PySlice>() {
-                        let indices = slice.indices(len)?;
+                    if let Ok(slice) = idx.cast::<pyo3::types::PySlice>() {
+                        let indices = slice.indices(len as isize)?;
                         let mut result = Vec::new();
                         let mut i = indices.start;
                         if indices.step > 0 {
@@ -137,7 +136,7 @@ macro_rules! define_live_list {
                                 i += indices.step;
                             }
                         }
-                        return Ok(result.into_py(py));
+                        return Ok(result.into_pyobject(py)?.into_any().unbind());
                     }
                     Err(pyo3::exceptions::PyTypeError::new_err("index must be an int or slice"))
                 }
@@ -156,7 +155,7 @@ macro_rules! define_live_list {
                         v[i as usize] = val.extract::<$elem>()?;
                         return Ok(());
                     }
-                    if let Ok(slice) = idx.downcast::<pyo3::types::PySlice>() {
+                    if let Ok(slice) = idx.cast::<pyo3::types::PySlice>() {
                         // Slice assignment (e.g. tone.wavetable[:] = [...]),
                         // confirmed needed by upstream's own
                         // 14_synthesizer.py example — this whole macro
@@ -165,7 +164,7 @@ macro_rules! define_live_list {
                         // when that official example hit exactly this
                         // TypeError. Same indices()+splice() pattern as
                         // the top-level bank lists (colors etc.).
-                        let indices = slice.indices(len)?;
+                        let indices = slice.indices(len as isize)?;
                         if indices.step != 1 {
                             return Err(pyo3::exceptions::PyValueError::new_err(
                                 "extended slices (step != 1) are not supported for assignment"
@@ -194,8 +193,8 @@ macro_rules! define_live_list {
                         v.remove(i as usize);
                         return Ok(());
                     }
-                    if let Ok(slice) = idx.downcast::<pyo3::types::PySlice>() {
-                        let indices = slice.indices(len)?;
+                    if let Ok(slice) = idx.cast::<pyo3::types::PySlice>() {
+                        let indices = slice.indices(len as isize)?;
                         if indices.step != 1 {
                             return Err(pyo3::exceptions::PyValueError::new_err(
                                 "extended slices (step != 1) are not supported for deletion"
@@ -651,7 +650,7 @@ pub fn user_data_dir(vendor_name: &str, app_name: &str) -> PyResult<String> {
 // avoids cross-compiling libcurl/OpenSSL for the target device.
 //
 // Both release the GIL for the duration of the blocking curl call
-// (py.allow_threads). Without this, a game calling these from a background
+// (py.detach). Without this, a game calling these from a background
 // Python thread (e.g. downloader.py) would still freeze the main
 // update()/draw() loop, since PyO3 holds the GIL across the FFI call
 // by default and only one Python thread can run at a time regardless.
@@ -664,7 +663,7 @@ pub fn user_data_dir(vendor_name: &str, app_name: &str) -> PyResult<String> {
 pub fn download_file(py: Python<'_>, url: &str, save_path: &str) -> PyResult<bool> {
     let url = url.to_owned();
     let save_path = save_path.to_owned();
-    let ok = py.allow_threads(move || {
+    let ok = py.detach(move || {
         std::process::Command::new("curl")
             .args(["-L", "-s", "-o", &save_path, &url])
             .status()
@@ -681,7 +680,7 @@ pub fn download_file(py: Python<'_>, url: &str, save_path: &str) -> PyResult<boo
 #[pyfunction]
 pub fn http_get(py: Python<'_>, url: &str) -> PyResult<String> {
     let url = url.to_owned();
-    let output = py.allow_threads(move || {
+    let output = py.detach(move || {
         std::process::Command::new("curl")
             .args(["-L", "-s", &url])
             .output()
@@ -915,6 +914,7 @@ pub fn btn(key: u32) -> bool {
 }
 
 #[pyfunction]
+#[pyo3(signature = (key, hold=None, repeat=None))]
 pub fn btnp(key: u32, hold: Option<u32>, repeat: Option<u32>) -> bool {
     unsafe {
         if PYXEL_READY {
@@ -982,8 +982,8 @@ pub fn init(
         }
 
         // Update pyxel.width/height module attributes to reflect game size
-        Python::with_gil(|py| {
-            if let Ok(m) = py.import_bound("pyxel") {
+        Python::attach(|py| {
+            if let Ok(m) = py.import("pyxel") {
                 let _ = m.setattr("width",  GAME_W);
                 let _ = m.setattr("height", GAME_H);
             }
@@ -1011,7 +1011,7 @@ pub fn init(
 // lets class-based games (e.g. Game() → pyxel.run(self.update, self.draw))
 // register their callbacks with the core.
 #[pyfunction]
-pub fn run(update: PyObject, draw: PyObject) {
+pub fn run(update: Py<PyAny>, draw: Py<PyAny>) {
     unsafe {
         PY_UPDATE = Some(update);
         PY_DRAW   = Some(draw);
@@ -1433,13 +1433,13 @@ pub fn clamp(
     ) {
         let (lo, hi) = if li < ui { (li, ui) } else { (ui, li) };
         let v = xi.clamp(lo, hi);
-        return Ok(v.into_py(py));
+        return Ok(v.into_pyobject(py)?.into_any().unbind());
     }
     let xf = x.extract::<f64>()?;
     let lf = lower.extract::<f64>()?;
     let uf = upper.extract::<f64>()?;
     let (lo, hi) = if lf < uf { (lf, uf) } else { (uf, lf) };
-    Ok(xf.clamp(lo, hi).into_py(py))
+    Ok(xf.clamp(lo, hi).into_pyobject(py)?.into_any().unbind())
 }
 
 // sgn: returns int for int inputs, float for float inputs
@@ -1452,7 +1452,7 @@ pub fn sgn(x: pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<Py<pyo3::PyAny>> {
             Ordering::Less => -1,
             Ordering::Equal => 0,
         };
-        return Ok(v.into_py(py));
+        return Ok(v.into_pyobject(py)?.into_any().unbind());
     }
     let xf = x.extract::<f64>()?;
     let v: f64 = match xf.partial_cmp(&0.0) {
@@ -1460,7 +1460,7 @@ pub fn sgn(x: pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<Py<pyo3::PyAny>> {
         Some(Ordering::Less) => -1.0,
         _ => 0.0,
     };
-    Ok(v.into_py(py))
+    Ok(v.into_pyobject(py)?.into_any().unbind())
 }
 
 #[pyfunction]
@@ -1648,9 +1648,9 @@ pub fn quit() {
 pub fn show() {
     unsafe {
         if !PYXEL_READY { return; }
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             // Create no-op lambda and cache as update/draw
-            let noop = py.eval_bound("lambda: None", None, None).unwrap();
+            let noop = py.eval(c"lambda: None", None, None).unwrap();
             if PY_UPDATE.is_none() {
                 PY_UPDATE = Some(noop.clone().into());
             }
@@ -1670,7 +1670,7 @@ pub fn flip() -> PyResult<()> {
     // pattern (`while True: ... pyxel.flip()`, e.g. 99_flip_animation.py)
     // never call back into Rust between flip() calls, so with flip() doing
     // nothing the loop never terminates — it spins forever inside the
-    // single py.run_bound() call that runs the script, permanently
+    // single py.run() call that runs the script, permanently
     // hanging retro_run() (RetroArch itself freezes, no crash, no error).
     // Raising here instead lets the loop's first flip() call unwind back
     // out with a clear, actionable message instead of a silent hang.
@@ -1791,8 +1791,8 @@ pub fn resize(width: u32, height: u32) -> PyResult<()> {
         // forever, never reflecting a runtime resize() call, even
         // though pyxel_core's own width()/height() (and everything
         // reading them internally) update correctly.
-        Python::with_gil(|py| {
-            if let Ok(m) = py.import_bound("pyxel") {
+        Python::attach(|py| {
+            if let Ok(m) = py.import("pyxel") {
                 let _ = m.setattr("width",  width);
                 let _ = m.setattr("height", height);
             }
@@ -1901,12 +1901,12 @@ impl PyImage {
     // width*height bytes total. Used by scripts that need bulk pixel
     // access faster than pset()/pget() one at a time (e.g. procedural
     // noise effects).
-    pub fn data_ptr(&self, py: Python) -> PyResult<PyObject> {
+    pub fn data_ptr(&self, py: Python) -> PyResult<Py<PyAny>> {
         unsafe {
             let img = &mut *self.rc().as_ptr();
             let size = (img.width() * img.height()) as usize;
             let ptr = img.data_ptr() as usize;
-            let ctypes = py.import_bound("ctypes")?;
+            let ctypes = py.import("ctypes")?;
             let c_uint8 = ctypes.getattr("c_uint8")?;
             let array_type = c_uint8.call_method1("__mul__", (size,))?;
             let array = array_type.call_method1("from_address", (ptr,))?;
@@ -2162,8 +2162,7 @@ impl PyImageList {
         pyxel_core::images().len()
     }
 
-    pub fn __getitem__(&self, py: pyo3::Python, idx: pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<pyo3::PyObject> {
-        use pyo3::IntoPy;
+    pub fn __getitem__(&self, py: pyo3::Python, idx: pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<pyo3::Py<pyo3::PyAny>> {
         let images = pyxel_core::images();
         let len = images.len() as i64;
         if let Ok(i) = idx.extract::<i64>() {
@@ -2173,10 +2172,10 @@ impl PyImageList {
                     String::from("list index out of range")
                 ));
             }
-            return Ok(PyImage { image: images[i as usize].clone() }.into_py(py));
+            return Ok(PyImage { image: images[i as usize].clone() }.into_pyobject(py)?.into_any().unbind());
         }
-        if let Ok(slice) = idx.downcast::<pyo3::types::PySlice>() {
-            let indices = slice.indices(len)?;
+        if let Ok(slice) = idx.cast::<pyo3::types::PySlice>() {
+            let indices = slice.indices(len as isize)?;
             let mut result = Vec::new();
             let mut i = indices.start;
             if indices.step > 0 {
@@ -2190,7 +2189,7 @@ impl PyImageList {
                     i += indices.step;
                 }
             }
-            return Ok(result.into_py(py));
+            return Ok(result.into_pyobject(py)?.into_any().unbind());
         }
         Err(pyo3::exceptions::PyTypeError::new_err("image index must be an int or slice"))
     }
@@ -2225,8 +2224,8 @@ impl PyImageList {
             images.remove(i as usize);
             return Ok(());
         }
-        if let Ok(slice) = idx.downcast::<pyo3::types::PySlice>() {
-            let indices = slice.indices(len)?;
+        if let Ok(slice) = idx.cast::<pyo3::types::PySlice>() {
+            let indices = slice.indices(len as isize)?;
             if indices.step != 1 {
                 return Err(pyo3::exceptions::PyValueError::new_err(
                     "extended slices (step != 1) are not supported for images deletion"
@@ -2519,8 +2518,7 @@ impl PySoundList {
         pyxel_core::sounds().len()
     }
 
-    pub fn __getitem__(&self, py: pyo3::Python, idx: pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<pyo3::PyObject> {
-        use pyo3::IntoPy;
+    pub fn __getitem__(&self, py: pyo3::Python, idx: pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<pyo3::Py<pyo3::PyAny>> {
         let len = pyxel_core::sounds().len() as i64;
         if let Ok(i) = idx.extract::<i64>() {
             let i = if i < 0 { i + len } else { i };
@@ -2529,10 +2527,10 @@ impl PySoundList {
                     String::from("list index out of range")
                 ));
             }
-            return Ok(PySound { sound: pyxel_core::sounds()[i as usize].clone() }.into_py(py));
+            return Ok(PySound { sound: pyxel_core::sounds()[i as usize].clone() }.into_pyobject(py)?.into_any().unbind());
         }
-        if let Ok(slice) = idx.downcast::<pyo3::types::PySlice>() {
-            let indices = slice.indices(len)?;
+        if let Ok(slice) = idx.cast::<pyo3::types::PySlice>() {
+            let indices = slice.indices(len as isize)?;
             let mut result = Vec::new();
             let mut i = indices.start;
             if indices.step > 0 {
@@ -2546,7 +2544,7 @@ impl PySoundList {
                     i += indices.step;
                 }
             }
-            return Ok(result.into_py(py));
+            return Ok(result.into_pyobject(py)?.into_any().unbind());
         }
         Err(pyo3::exceptions::PyTypeError::new_err("sound index must be an int or slice"))
     }
@@ -2574,8 +2572,8 @@ impl PySoundList {
             sounds.remove(i as usize);
             return Ok(());
         }
-        if let Ok(slice) = idx.downcast::<pyo3::types::PySlice>() {
-            let indices = slice.indices(len)?;
+        if let Ok(slice) = idx.cast::<pyo3::types::PySlice>() {
+            let indices = slice.indices(len as isize)?;
             if indices.step != 1 {
                 return Err(pyo3::exceptions::PyValueError::new_err(
                     "extended slices (step != 1) are not supported for sounds deletion"
@@ -2730,12 +2728,12 @@ impl PyTilemap {
     // (test_data_ptr_read/_write/_row_stride) that this is expected
     // to exist, not test-only scaffolding. Used by scripts that need
     // bulk tile access faster than pset()/pget() one at a time.
-    pub fn data_ptr(&self, py: Python) -> PyResult<PyObject> {
+    pub fn data_ptr(&self, py: Python) -> PyResult<Py<PyAny>> {
         unsafe {
             let tm = &mut *self.rc().as_ptr();
             let size = (tm.width() * tm.height() * 2) as usize;
             let ptr = tm.data_ptr() as usize;
-            let ctypes = py.import_bound("ctypes")?;
+            let ctypes = py.import("ctypes")?;
             let c_uint16 = ctypes.getattr("c_uint16")?;
             let array_type = c_uint16.call_method1("__mul__", (size,))?;
             let array = array_type.call_method1("from_address", (ptr,))?;
@@ -2749,17 +2747,16 @@ impl PyTilemap {
     // test_tilemap_wrong_imgsrc_type) that this bidirectional support
     // is expected, not an int-only design.
     #[getter]
-    pub fn imgsrc(&self, py: pyo3::Python) -> pyo3::PyObject {
-        use pyo3::IntoPy;
+    pub fn imgsrc(&self, py: pyo3::Python) -> PyResult<pyo3::Py<pyo3::PyAny>> {
         unsafe {
-            match &(&*self.rc().as_ptr()).imgsrc {
-                pyxel_core::ImageSource::Index(i) => (*i).into_py(py),
+            Ok(match &(&*self.rc().as_ptr()).imgsrc {
+                pyxel_core::ImageSource::Index(i) => (*i).into_pyobject(py)?.into_any().unbind(),
                 pyxel_core::ImageSource::Image(rc) => {
                     pyo3::Py::new(py, PyImage { image: rc.clone() })
-                        .map(|obj| obj.into_py(py))
+                        .map(|obj| obj.into_any())
                         .unwrap_or_else(|_| py.None())
                 }
-            }
+            })
         }
     }
 
@@ -2785,7 +2782,7 @@ impl PyTilemap {
     // an Image if set as an instance). getter/setter use distinct keys,
     // same reasoning as Tone.waveform/noise above.
     #[getter]
-    pub fn refimg(&self, py: pyo3::Python) -> pyo3::PyObject {
+    pub fn refimg(&self, py: pyo3::Python) -> PyResult<pyo3::Py<pyo3::PyAny>> {
         warn_deprecated_once("Tilemap.refimg.get", "Tilemap.refimg is deprecated. Use Tilemap.imgsrc instead.");
         self.imgsrc(py)
     }
@@ -2803,20 +2800,19 @@ impl PyTilemap {
     // upstream's own test (constructs Tilemap(8, 8, 0) — an int index —
     // then asserts isinstance(tm.image, pyxel.Image)).
     #[getter]
-    pub fn image(&self, py: pyo3::Python) -> pyo3::PyObject {
-        use pyo3::IntoPy;
+    pub fn image(&self, py: pyo3::Python) -> pyo3::Py<pyo3::PyAny> {
         warn_deprecated_once("Tilemap.image.get", "Tilemap.image is deprecated. Use Tilemap.imgsrc instead.");
         unsafe {
             match &(&*self.rc().as_ptr()).imgsrc {
                 pyxel_core::ImageSource::Index(i) => {
                     let rc = pyxel_core::images()[*i as usize].clone();
                     pyo3::Py::new(py, PyImage { image: rc })
-                        .map(|obj| obj.into_py(py))
+                        .map(|obj| obj.into_any())
                         .unwrap_or_else(|_| py.None())
                 }
                 pyxel_core::ImageSource::Image(rc) => {
                     pyo3::Py::new(py, PyImage { image: rc.clone() })
-                        .map(|obj| obj.into_py(py))
+                        .map(|obj| obj.into_any())
                         .unwrap_or_else(|_| py.None())
                 }
             }
@@ -2977,8 +2973,7 @@ impl PyTilemapList {
         pyxel_core::tilemaps().len()
     }
 
-    pub fn __getitem__(&self, py: pyo3::Python, idx: pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<pyo3::PyObject> {
-        use pyo3::IntoPy;
+    pub fn __getitem__(&self, py: pyo3::Python, idx: pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<pyo3::Py<pyo3::PyAny>> {
         let tilemaps = pyxel_core::tilemaps();
         let len = tilemaps.len() as i64;
         if let Ok(i) = idx.extract::<i64>() {
@@ -2988,10 +2983,10 @@ impl PyTilemapList {
                     String::from("list index out of range")
                 ));
             }
-            return Ok(PyTilemap { tilemap: tilemaps[i as usize].clone() }.into_py(py));
+            return Ok(PyTilemap { tilemap: tilemaps[i as usize].clone() }.into_pyobject(py)?.into_any().unbind());
         }
-        if let Ok(slice) = idx.downcast::<pyo3::types::PySlice>() {
-            let indices = slice.indices(len)?;
+        if let Ok(slice) = idx.cast::<pyo3::types::PySlice>() {
+            let indices = slice.indices(len as isize)?;
             let mut result = Vec::new();
             let mut i = indices.start;
             if indices.step > 0 {
@@ -3005,7 +3000,7 @@ impl PyTilemapList {
                     i += indices.step;
                 }
             }
-            return Ok(result.into_py(py));
+            return Ok(result.into_pyobject(py)?.into_any().unbind());
         }
         Err(pyo3::exceptions::PyTypeError::new_err("tilemap index must be an int or slice"))
     }
@@ -3036,8 +3031,8 @@ impl PyTilemapList {
             tilemaps.remove(i as usize);
             return Ok(());
         }
-        if let Ok(slice) = idx.downcast::<pyo3::types::PySlice>() {
-            let indices = slice.indices(len)?;
+        if let Ok(slice) = idx.cast::<pyo3::types::PySlice>() {
+            let indices = slice.indices(len as isize)?;
             if indices.step != 1 {
                 return Err(pyo3::exceptions::PyValueError::new_err(
                     "extended slices (step != 1) are not supported for tilemaps deletion"
@@ -3109,14 +3104,21 @@ impl PyTilemapList {
 // Font wrapper (font_wrapper.rs)
 // ---------------------------------------------------------------------------
 
-#[pyclass(name = "Font")]
+#[pyclass(name = "Font", unsendable)]
 pub struct PyFont {
     inner: pyxel_core::RcFont,
 }
 
-// RcFont is Rc<UnsafeCell<Font>> which is not Send by default.
-// We are single-threaded in the libretro context so this is safe.
-unsafe impl Send for PyFont {}
+// RcFont is Rc<UnsafeCell<Font>>, neither Send nor Sync — matches
+// every other Rc-backed wrapper in this file (Image/Tilemap/etc).
+// `unsendable` (rather than the old `unsafe impl Send for PyFont {}`)
+// tells PyO3 to panic at runtime if this is ever accessed from a
+// different thread than it was created on, instead of asserting a
+// guarantee this type doesn't actually uphold. Since PyO3 0.23,
+// #[pyclass] additionally requires Sync (for free-threaded Python
+// support) unless marked unsendable — Rc<UnsafeCell<_>> can't satisfy
+// that either way, so unsendable is the only option here, same as it
+// always should have been.
 
 #[pymethods]
 impl PyFont {
@@ -3293,8 +3295,7 @@ impl PyColors {
         pyxel_core::colors().len()
     }
 
-    pub fn __getitem__(&self, py: pyo3::Python, idx: pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<pyo3::PyObject> {
-        use pyo3::IntoPy;
+    pub fn __getitem__(&self, py: pyo3::Python, idx: pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<pyo3::Py<pyo3::PyAny>> {
         let colors = pyxel_core::colors();
         let len = colors.len() as i64;
         if let Ok(i) = idx.extract::<i64>() {
@@ -3302,10 +3303,10 @@ impl PyColors {
             if i < 0 || i >= len {
                 return Err(pyo3::exceptions::PyIndexError::new_err("list index out of range"));
             }
-            return Ok(colors[i as usize].into_py(py));
+            return Ok(colors[i as usize].into_pyobject(py)?.into_any().unbind());
         }
-        if let Ok(slice) = idx.downcast::<pyo3::types::PySlice>() {
-            let indices = slice.indices(len)?;
+        if let Ok(slice) = idx.cast::<pyo3::types::PySlice>() {
+            let indices = slice.indices(len as isize)?;
             let mut result = Vec::new();
             let mut i = indices.start;
             if indices.step > 0 {
@@ -3319,7 +3320,7 @@ impl PyColors {
                     i += indices.step;
                 }
             }
-            return Ok(result.into_py(py));
+            return Ok(result.into_pyobject(py)?.into_any().unbind());
         }
         Err(pyo3::exceptions::PyTypeError::new_err("colors index must be an int or slice"))
     }
@@ -3335,7 +3336,7 @@ impl PyColors {
                 return Err(pyo3::exceptions::PyIndexError::new_err("list index out of range"));
             }
             colors[i as usize] = v;
-        } else if let Ok(slice) = idx.downcast::<pyo3::types::PySlice>() {
+        } else if let Ok(slice) = idx.cast::<pyo3::types::PySlice>() {
             // Slice assignment: colors[a:b] = [...]. Previously this
             // branch just did `*pyxel_core::colors() = items`,
             // replacing the ENTIRE list regardless of the slice's
@@ -3351,7 +3352,7 @@ impl PyColors {
             // test_reversed_step_one_slice_assignment_inserts).
             let mut colors_ref = pyxel_core::colors();
             let len = colors_ref.len() as i64;
-            let indices = slice.indices(len)?;
+            let indices = slice.indices(len as isize)?;
             if indices.step != 1 {
                 return Err(pyo3::exceptions::PyValueError::new_err(
                     "extended slices (step != 1) are not supported for colors assignment"
@@ -3392,8 +3393,8 @@ impl PyColors {
             colors.remove(i as usize);
             return Ok(());
         }
-        if let Ok(slice) = idx.downcast::<pyo3::types::PySlice>() {
-            let indices = slice.indices(len)?;
+        if let Ok(slice) = idx.cast::<pyo3::types::PySlice>() {
+            let indices = slice.indices(len as isize)?;
             if indices.step != 1 {
                 return Err(pyo3::exceptions::PyValueError::new_err(
                     "extended slices (step != 1) are not supported for colors deletion"
@@ -3496,8 +3497,7 @@ impl PyChannelList {
         pyxel_core::channels().len()
     }
 
-    pub fn __getitem__(&self, py: pyo3::Python, idx: pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<pyo3::PyObject> {
-        use pyo3::IntoPy;
+    pub fn __getitem__(&self, py: pyo3::Python, idx: pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<pyo3::Py<pyo3::PyAny>> {
         let len = pyxel_core::channels().len() as i64;
         if let Ok(i) = idx.extract::<i64>() {
             let i = if i < 0 { i + len } else { i };
@@ -3506,10 +3506,10 @@ impl PyChannelList {
                     String::from("list index out of range")
                 ));
             }
-            return Ok(PyChannel { channel: pyxel_core::channels()[i as usize].clone() }.into_py(py));
+            return Ok(PyChannel { channel: pyxel_core::channels()[i as usize].clone() }.into_pyobject(py)?.into_any().unbind());
         }
-        if let Ok(slice) = idx.downcast::<pyo3::types::PySlice>() {
-            let indices = slice.indices(len)?;
+        if let Ok(slice) = idx.cast::<pyo3::types::PySlice>() {
+            let indices = slice.indices(len as isize)?;
             let mut result = Vec::new();
             let mut i = indices.start;
             if indices.step > 0 {
@@ -3523,7 +3523,7 @@ impl PyChannelList {
                     i += indices.step;
                 }
             }
-            return Ok(result.into_py(py));
+            return Ok(result.into_pyobject(py)?.into_any().unbind());
         }
         Err(pyo3::exceptions::PyTypeError::new_err("channel index must be an int or slice"))
     }
@@ -3548,7 +3548,7 @@ impl PyChannelList {
                 dst.gain   = src.gain;
                 dst.detune = src.detune;
             }
-        } else if let Ok(slice) = idx.downcast::<pyo3::types::PySlice>() {
+        } else if let Ok(slice) = idx.cast::<pyo3::types::PySlice>() {
             // Slice assignment: channels[a:b] = [ch0, ch1, ...].
             // Previously this ignored the slice's actual start/stop
             // and always copied into existing slots starting from
@@ -3566,7 +3566,7 @@ impl PyChannelList {
             // the argument's own Rc — each channel bank slot keeps
             // its own independent identity.
             let len = pyxel_core::channels().len() as i64;
-            let indices = slice.indices(len)?;
+            let indices = slice.indices(len as isize)?;
             if indices.step != 1 {
                 return Err(pyo3::exceptions::PyValueError::new_err(
                     "extended slices (step != 1) are not supported for channels assignment"
@@ -3607,8 +3607,8 @@ impl PyChannelList {
             channels.remove(i as usize);
             return Ok(());
         }
-        if let Ok(slice) = idx.downcast::<pyo3::types::PySlice>() {
-            let indices = slice.indices(len)?;
+        if let Ok(slice) = idx.cast::<pyo3::types::PySlice>() {
+            let indices = slice.indices(len as isize)?;
             if indices.step != 1 {
                 return Err(pyo3::exceptions::PyValueError::new_err(
                     "extended slices (step != 1) are not supported for channels deletion"
@@ -3898,8 +3898,7 @@ impl PyToneList {
         pyxel_core::tones().len()
     }
 
-    pub fn __getitem__(&self, py: pyo3::Python, idx: pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<pyo3::PyObject> {
-        use pyo3::IntoPy;
+    pub fn __getitem__(&self, py: pyo3::Python, idx: pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<pyo3::Py<pyo3::PyAny>> {
         let len = pyxel_core::tones().len() as i64;
         if let Ok(i) = idx.extract::<i64>() {
             let i = if i < 0 { i + len } else { i };
@@ -3908,10 +3907,10 @@ impl PyToneList {
                     String::from("list index out of range")
                 ));
             }
-            return Ok(PyTone { tone: pyxel_core::tones()[i as usize].clone() }.into_py(py));
+            return Ok(PyTone { tone: pyxel_core::tones()[i as usize].clone() }.into_pyobject(py)?.into_any().unbind());
         }
-        if let Ok(slice) = idx.downcast::<pyo3::types::PySlice>() {
-            let indices = slice.indices(len)?;
+        if let Ok(slice) = idx.cast::<pyo3::types::PySlice>() {
+            let indices = slice.indices(len as isize)?;
             let mut result = Vec::new();
             let mut i = indices.start;
             if indices.step > 0 {
@@ -3925,7 +3924,7 @@ impl PyToneList {
                     i += indices.step;
                 }
             }
-            return Ok(result.into_py(py));
+            return Ok(result.into_pyobject(py)?.into_any().unbind());
         }
         Err(pyo3::exceptions::PyTypeError::new_err("tone index must be an int or slice"))
     }
@@ -3951,7 +3950,7 @@ impl PyToneList {
                 dst.gain        = src.gain;
                 dst.wavetable   = src.wavetable.clone();
             }
-        } else if let Ok(slice) = idx.downcast::<pyo3::types::PySlice>() {
+        } else if let Ok(slice) = idx.cast::<pyo3::types::PySlice>() {
             // Slice assignment: tones[a:b] = [t0, t1, ...]. Same fix
             // as PyChannelList's __setitem__ — previously ignored the
             // slice's actual start/stop and always copied into
@@ -3962,7 +3961,7 @@ impl PyToneList {
             // into the bank" semantics) rather than aliasing the
             // argument's own Rc.
             let len = pyxel_core::tones().len() as i64;
-            let indices = slice.indices(len)?;
+            let indices = slice.indices(len as isize)?;
             if indices.step != 1 {
                 return Err(pyo3::exceptions::PyValueError::new_err(
                     "extended slices (step != 1) are not supported for tones assignment"
@@ -3995,8 +3994,8 @@ impl PyToneList {
             tones.remove(i as usize);
             return Ok(());
         }
-        if let Ok(slice) = idx.downcast::<pyo3::types::PySlice>() {
-            let indices = slice.indices(len)?;
+        if let Ok(slice) = idx.cast::<pyo3::types::PySlice>() {
+            let indices = slice.indices(len as isize)?;
             if indices.step != 1 {
                 return Err(pyo3::exceptions::PyValueError::new_err(
                     "extended slices (step != 1) are not supported for tones deletion"
@@ -4222,8 +4221,7 @@ impl PyMusicSeqs {
     // (matching upstream: msc.seqs[0:2] == [[0], [1]], not wrapper
     // objects — slicing reads a snapshot, same as any Python list
     // slice).
-    pub fn __getitem__(&self, py: pyo3::Python, idx: pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<pyo3::PyObject> {
-        use pyo3::IntoPy;
+    pub fn __getitem__(&self, py: pyo3::Python, idx: pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<pyo3::Py<pyo3::PyAny>> {
         {
             let len = (&*self.parent.lock().unwrap_or_else(std::sync::PoisonError::into_inner)).seqs.len();
             if let Ok(i) = idx.extract::<i64>() {
@@ -4232,10 +4230,10 @@ impl PyMusicSeqs {
                 if i < 0 || i >= l {
                     return Err(pyo3::exceptions::PyIndexError::new_err("music channel index out of range"));
                 }
-                return Ok(PyMusicSeq { parent: self.parent.clone(), channel: i as usize }.into_py(py));
+                return Ok(PyMusicSeq { parent: self.parent.clone(), channel: i as usize }.into_pyobject(py)?.into_any().unbind());
             }
-            if let Ok(slice) = idx.downcast::<pyo3::types::PySlice>() {
-                let indices = slice.indices(len as i64)?;
+            if let Ok(slice) = idx.cast::<pyo3::types::PySlice>() {
+                let indices = slice.indices(len as isize)?;
                 let mut result = Vec::new();
                 let mut i = indices.start;
                 if indices.step > 0 {
@@ -4249,7 +4247,7 @@ impl PyMusicSeqs {
                         i += indices.step;
                     }
                 }
-                return Ok(result.into_py(py));
+                return Ok(result.into_pyobject(py)?.into_any().unbind());
             }
             Err(pyo3::exceptions::PyTypeError::new_err("music channel index must be an int or slice"))
         }
@@ -4273,9 +4271,9 @@ impl PyMusicSeqs {
                 music.seqs[i as usize] = new_seq;
                 return Ok(());
             }
-            if let Ok(slice) = idx.downcast::<pyo3::types::PySlice>() {
+            if let Ok(slice) = idx.cast::<pyo3::types::PySlice>() {
                 let len = music.seqs.len() as i64;
-                let indices = slice.indices(len)?;
+                let indices = slice.indices(len as isize)?;
                 if indices.step != 1 {
                     return Err(pyo3::exceptions::PyValueError::new_err(
                         "extended slices (step != 1) are not supported for Music.seqs assignment"
@@ -4304,8 +4302,8 @@ impl PyMusicSeqs {
                 music.seqs.remove(i as usize);
                 return Ok(());
             }
-            if let Ok(slice) = idx.downcast::<pyo3::types::PySlice>() {
-                let indices = slice.indices(len)?;
+            if let Ok(slice) = idx.cast::<pyo3::types::PySlice>() {
+                let indices = slice.indices(len as isize)?;
                 if indices.step != 1 {
                     return Err(pyo3::exceptions::PyValueError::new_err(
                         "extended slices (step != 1) are not supported for Music.seqs deletion"
@@ -4472,8 +4470,7 @@ impl PyMusicList {
         pyxel_core::musics().len()
     }
 
-    pub fn __getitem__(&self, py: pyo3::Python, idx: pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<pyo3::PyObject> {
-        use pyo3::IntoPy;
+    pub fn __getitem__(&self, py: pyo3::Python, idx: pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<pyo3::Py<pyo3::PyAny>> {
         let len = pyxel_core::musics().len() as i64;
         if let Ok(i) = idx.extract::<i64>() {
             let i = if i < 0 { i + len } else { i };
@@ -4482,10 +4479,10 @@ impl PyMusicList {
                     String::from("list index out of range")
                 ));
             }
-            return Ok(PyMusic { music: pyxel_core::musics()[i as usize].clone() }.into_py(py));
+            return Ok(PyMusic { music: pyxel_core::musics()[i as usize].clone() }.into_pyobject(py)?.into_any().unbind());
         }
-        if let Ok(slice) = idx.downcast::<pyo3::types::PySlice>() {
-            let indices = slice.indices(len)?;
+        if let Ok(slice) = idx.cast::<pyo3::types::PySlice>() {
+            let indices = slice.indices(len as isize)?;
             let mut result = Vec::new();
             let mut i = indices.start;
             if indices.step > 0 {
@@ -4499,7 +4496,7 @@ impl PyMusicList {
                     i += indices.step;
                 }
             }
-            return Ok(result.into_py(py));
+            return Ok(result.into_pyobject(py)?.into_any().unbind());
         }
         Err(pyo3::exceptions::PyTypeError::new_err("music index must be an int or slice"))
     }
@@ -4527,8 +4524,8 @@ impl PyMusicList {
             musics.remove(i as usize);
             return Ok(());
         }
-        if let Ok(slice) = idx.downcast::<pyo3::types::PySlice>() {
-            let indices = slice.indices(len)?;
+        if let Ok(slice) = idx.cast::<pyo3::types::PySlice>() {
+            let indices = slice.indices(len as isize)?;
             if indices.step != 1 {
                 return Err(pyo3::exceptions::PyValueError::new_err(
                     "extended slices (step != 1) are not supported for musics deletion"
@@ -4607,30 +4604,30 @@ impl PyMusicList {
 pub fn __getattr__(py: Python, name: &str) -> PyResult<Py<PyAny>> {
     let value: Py<PyAny> = match name {
         // System
-        "width"       => (*pyxel_core::width()).into_py(py),
-        "height"      => (*pyxel_core::height()).into_py(py),
-        "frame_count" => unsafe { LR_FRAME_COUNT }.into_py(py),
+        "width"       => (*pyxel_core::width()).into_pyobject(py)?.into_any().unbind(),
+        "height"      => (*pyxel_core::height()).into_pyobject(py)?.into_any().unbind(),
+        "frame_count" => unsafe { LR_FRAME_COUNT }.into_pyobject(py)?.into_any().unbind(),
         // Input
-        "mouse_x"     => (*pyxel_core::mouse_x()).into_py(py),
-        "mouse_y"     => (*pyxel_core::mouse_y()).into_py(py),
-        "mouse_wheel" => (*pyxel_core::mouse_wheel()).into_py(py),
+        "mouse_x"     => (*pyxel_core::mouse_x()).into_pyobject(py)?.into_any().unbind(),
+        "mouse_y"     => (*pyxel_core::mouse_y()).into_pyobject(py)?.into_any().unbind(),
+        "mouse_wheel" => (*pyxel_core::mouse_wheel()).into_pyobject(py)?.into_any().unbind(),
         // Graphics
-        "colors"   => PyColors.into_py(py),
-        "screen"   => PyImage { image: pyxel_core::screen().clone() }.into_py(py),
+        "colors"   => PyColors.into_pyobject(py)?.into_any().unbind(),
+        "screen"   => PyImage { image: pyxel_core::screen().clone() }.into_pyobject(py)?.into_any().unbind(),
         // Missing entirely until now (pyxel.screen was added in
         // v0.11.2, but these two built-in image banks were
         // overlooked) — the mouse cursor sprite and the built-in
         // font glyph atlas, both exposed upstream as plain Image
         // instances alongside pyxel.screen.
-        "cursor"   => PyImage { image: pyxel_core::cursor_image().clone() }.into_py(py),
-        "font"     => PyImage { image: pyxel_core::font_image().clone() }.into_py(py),
-        "images"   => PyImageList.into_py(py),
-        "tilemaps" => PyTilemapList.into_py(py),
+        "cursor"   => PyImage { image: pyxel_core::cursor_image().clone() }.into_pyobject(py)?.into_any().unbind(),
+        "font"     => PyImage { image: pyxel_core::font_image().clone() }.into_pyobject(py)?.into_any().unbind(),
+        "images"   => PyImageList.into_pyobject(py)?.into_any().unbind(),
+        "tilemaps" => PyTilemapList.into_pyobject(py)?.into_any().unbind(),
         // Audio
-        "sounds"   => PySoundList.into_py(py),
-        "musics"   => PyMusicList.into_py(py),
-        "tones"    => PyToneList.into_py(py),
-        "channels" => PyChannelList.into_py(py),
+        "sounds"   => PySoundList.into_pyobject(py)?.into_any().unbind(),
+        "musics"   => PyMusicList.into_pyobject(py)?.into_any().unbind(),
+        "tones"    => PyToneList.into_pyobject(py)?.into_any().unbind(),
+        "channels" => PyChannelList.into_pyobject(py)?.into_any().unbind(),
         _ => return Err(pyo3::exceptions::PyAttributeError::new_err(
             format!("module 'pyxel' has no attribute '{name}'")
         )),
@@ -4639,7 +4636,13 @@ pub fn __getattr__(py: Python, name: &str) -> PyResult<Py<PyAny>> {
 }
 
 
-#[pymodule]
+// gil_used = true: opts out of free-threaded Python support (default
+// since PyO3 0.28). Every pyclass in this module wraps Rc/RefCell-
+// based resources (not Sync) and is marked `unsendable` accordingly —
+// none of it is safe for genuinely concurrent access from multiple
+// Python threads, so explicitly declaring "this module needs the GIL"
+// is accurate rather than aspirational.
+#[pymodule(gil_used = true)]
 pub fn pyxel(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Drawing
     m.add_function(wrap_pyfunction!(cls,         m)?)?;
