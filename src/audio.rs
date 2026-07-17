@@ -23,7 +23,7 @@ pub unsafe fn submit_audio_frame() {
     SAMPLE_ACCUMULATOR -= samples as f32;
 
     let mut mono = vec![0i16; samples];
-    pyxel_core::Audio::render_samples(pyxel_core::channels(), blip, &mut mono);
+    pyxel_core::Audio::render_samples(&pyxel_core::channels(), blip, &mut mono);
 
     let mut stereo = vec![0i16; samples * 2];
     for (i, &s) in mono.iter().enumerate() {

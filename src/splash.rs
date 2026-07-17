@@ -85,7 +85,7 @@ pub fn draw() {
     // Position: left-aligned to pyxel, above it
     let lx2 = 17.0f32;
     let ly2 = 55.0f32;
-    draw_text_outlined(px, lx2, ly2, "libretro", 13);
+    draw_text_outlined(&px, lx2, ly2, "libretro", 13);
 
     // --- "Pyxel" in 4x pixel-art letters, centered in cube ---
     // Cube center x = 64, pyxel width = 5*12 + 4*2 = 68px → start x = 64-34 = 30
@@ -107,12 +107,12 @@ pub fn draw() {
         26.0,
         0,
     );
-    draw_pyxel_text_outlined(px, px_start_x, px_start_y, 7);
+    draw_pyxel_text_outlined(&px, px_start_x, px_start_y, 7);
 
     // --- Version bottom right ---
     let ver_str = format!("v{}", VERSION);
     let ver_x = 128.0 - (ver_str.len() as f32 * 4.0) - 2.0;
-    draw_text_outlined(px, ver_x, 119.0, &ver_str, 7);
+    draw_text_outlined(&px, ver_x, 119.0, &ver_str, 7);
 }
 
 /// Draw text with 1px black outline.

@@ -20,13 +20,12 @@ pyxel.init(160, 120, title="lr-pyxel upstream compat suite")
 # Upstream Pyxel's own pytest files (python/tests/*.py), run verbatim
 # (no modifications) against lr-pyxel's embedded engine. See the
 # "Known Issues" section of README.md — this suite is what backs that
-# claim. Excluded from the full upstream set of 22: files that spawn
+# claim. Excluded from the full upstream set: files that spawn
 # subprocesses expecting a standalone `import pyxel`, exercise
-# `pyxel.cli`, or (test_input.py) exclusively test pyxel.set_btn()-
-# style test-only input-injection APIs that lr-pyxel has no plan to
-# implement (see "Known Limitations" in README.md) — running it here
-# would just report the same permanent, already-documented gap as
-# 20-some failures, not new signal.
+# `pyxel.cli`, exercise test-only input-injection APIs lr-pyxel has no
+# plan to implement, or are the repo's own dev-tooling/meta tests
+# (doc generation, source-formatting checks, version-bump scripts) —
+# see README.md's "Known exclusions" for the full rationale per file.
 TEST_FILES = [
     "test_channel.py",
     "test_tone.py",
@@ -36,6 +35,8 @@ TEST_FILES = [
     "test_math.py",
     "test_utils.py",
     "test_audio.py",
+    "test_audio_semantics.py",
+    "test_audio_render.py",
     "test_errors.py",
     "test_font.py",
     "test_graphics.py",
@@ -106,11 +107,72 @@ def _fixture(*args, **kwargs):
     return decorator
 
 
+# --- Fake "pytest.mark.parametrize" -------------------------------------
+# A handful of upstream test files (test_errors.py, test_resource_io.py,
+# test_system.py) use @pytest.mark.parametrize to run one test body
+# against a table of inputs. Previously the fake pytest module had no
+# `mark` attribute at all, so merely *importing* one of these files
+# raised AttributeError on the decorator line — the whole file failed
+# to load, not just the parametrized tests. This stores each
+# decorated function's (names, argvalues) on the function object
+# itself; run_test_file()'s discovery loop below expands it into one
+# sub-result per row instead of calling the method directly.
+def _parametrize(argnames, argvalues, ids=None, **_ignored_kwargs):
+    names = (
+        [n.strip() for n in argnames.split(",")]
+        if isinstance(argnames, str)
+        else list(argnames)
+    )
+
+    def decorator(fn):
+        fn._pytest_parametrize = (names, list(argvalues), ids)
+        return fn
+    return decorator
+
+
+class _Mark:
+    parametrize = staticmethod(_parametrize)
+
+
 _fake_pytest = types.ModuleType("pytest")
 _fake_pytest.approx = _Approx
 _fake_pytest.raises = _raises
 _fake_pytest.fixture = _fixture
+_fake_pytest.mark = _Mark()
 sys.modules["pytest"] = _fake_pytest
+
+
+# --- Fake "_assertions" module -------------------------------------------
+# Registered the same way as the fake "pytest" module above. Upstream
+# added this small shared helper (python/tests/_assertions.py) after
+# this harness was first written — test_errors.py, test_resize.py,
+# test_resource_io.py, test_sequences.py, and test_system.py all do
+# `from _assertions import raises_exact`, so without this, those five
+# files fail to even load ("No module named '_assertions'"), not just
+# fail individual tests.
+#
+# raises_exact() is upstream's own stricter version of pytest.raises():
+# it additionally asserts the raised exception's message matches
+# exactly, not just its type. Reimplemented here on top of the same
+# _RaisesContext used for the fake pytest.raises() above, since the
+# logic (type + exact message check) is identical either way.
+@contextlib.contextmanager
+def _raises_exact(exception_type, message):
+    with _raises(exception_type) as exc_info:
+        yield exc_info
+    if type(exc_info.value) is not exception_type:
+        raise AssertionError(
+            f"DID NOT RAISE exactly {exception_type} (raised {type(exc_info.value)} instead)"
+        )
+    if str(exc_info.value) != message:
+        raise AssertionError(
+            f"Exception message {str(exc_info.value)!r} != expected {message!r}"
+        )
+
+
+_fake_assertions = types.ModuleType("_assertions")
+_fake_assertions.raises_exact = _raises_exact
+sys.modules["_assertions"] = _fake_assertions
 
 
 # --- Minimal per-test reset, matching conftest.py's autouse fixture ----
@@ -161,7 +223,10 @@ def run_test_file(filename):
     except OSError as e:
         return [(f"{filename} (FILE)", False, str(e))]
 
-    namespace = {}
+    # Some upstream files (e.g. test_audio_render.py) use `__file__` at
+    # module scope (Path(__file__).parent) to locate reference assets.
+    # exec()'d code has no `__file__` unless the namespace supplies one.
+    namespace = {"__file__": filename}
     try:
         exec(compile(source, filename, "exec"), namespace)
     except Exception as e:
@@ -172,10 +237,16 @@ def run_test_file(filename):
             instance = obj()
             for method_name in dir(instance):
                 if method_name.startswith("test_"):
-                    reset_pyxel_state()
                     method = getattr(instance, method_name)
-                    params = list(inspect.signature(method).parameters)
                     label = f"{filename[:-3]}.{name}.{method_name}"
+                    parametrize = getattr(method, "_pytest_parametrize", None)
+                    if parametrize is not None:
+                        file_results.extend(
+                            _run_parametrized(method, parametrize, label)
+                        )
+                        continue
+                    reset_pyxel_state()
+                    params = list(inspect.signature(method).parameters)
                     unsupported = [p for p in params if p != "capfd"]
                     try:
                         if unsupported:
@@ -193,6 +264,42 @@ def run_test_file(filename):
                     except Exception as e:
                         file_results.append((label, False, str(e)))
     return file_results
+
+
+def _run_parametrized(method, parametrize, label):
+    # Expands one @pytest.mark.parametrize-decorated test into one
+    # sub-result per row. A row can still combine parametrize'd names
+    # with an actual (unsupported) fixture like tmp_path — e.g.
+    # test_resource_io.py's test_unreadable_legacy_entry_is_not_treated
+    # _as_missing takes both `tmp_path` and the parametrized `entry` —
+    # so any leftover parameter that isn't one of the parametrize names
+    # and isn't capfd still marks that row as skipped, same as a
+    # plain (non-parametrized) test would be.
+    names, argvalues, ids = parametrize
+    params = list(inspect.signature(method).parameters)
+    leftover = [p for p in params if p not in names and p != "capfd"]
+    results = []
+    for row_index, values in enumerate(argvalues):
+        row_id = ids[row_index] if ids else repr(values)
+        row_label = f"{label}[{row_id}]"
+        if leftover:
+            results.append(
+                (row_label, None, f"unsupported fixture(s): {leftover}")
+            )
+            continue
+        reset_pyxel_state()
+        kwargs = {names[0]: values} if len(names) == 1 else dict(zip(names, values))
+        try:
+            if "capfd" in params:
+                capfd = _Capfd()
+                with contextlib.redirect_stdout(capfd._buf):
+                    method(capfd=capfd, **kwargs)
+            else:
+                method(**kwargs)
+            results.append((row_label, True, ""))
+        except Exception as e:
+            results.append((row_label, False, str(e)))
+    return results
 
 
 all_results = []

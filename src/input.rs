@@ -229,7 +229,7 @@ const KEY_MAP2: &[(u32, u32)] = &[
 /// stale stuck entry, so no leftover state can survive a content switch.
 pub unsafe fn reset_all_button_states() {
     if !crate::PYXEL_READY { return; }
-    let px = pyxel_core::pyxel();
+    let mut px = pyxel_core::pyxel();
     for &(_, key) in KEY_MAP {
         px.set_button_state(key, false);
     }
@@ -271,7 +271,7 @@ pub unsafe fn reset_all_button_states() {
 
 /// Translate libretro joypad bitmask to Pyxel key states.
 pub unsafe fn inject_input(buttons: u32) {
-    let px = pyxel_core::pyxel();
+    let mut px = pyxel_core::pyxel();
     let changed = buttons ^ PREV_BUTTONS;
     for &(bit, key) in KEY_MAP {
         let mask = 1u32 << bit;
@@ -286,7 +286,7 @@ pub unsafe fn inject_input(buttons: u32) {
 /// GAMEPAD2) — see KEY_MAP2's doc comment for why this doesn't also
 /// alias to KEY_Z/KEY_X/etc. the way player 1's does.
 pub unsafe fn inject_input2(buttons: u32) {
-    let px = pyxel_core::pyxel();
+    let mut px = pyxel_core::pyxel();
     let changed = buttons ^ PREV_BUTTONS2;
     for &(bit, key) in KEY_MAP2 {
         let mask = 1u32 << bit;
@@ -334,7 +334,7 @@ pub unsafe fn inject_mouse_input(state: unsafe extern "C" fn(u32, u32, u32, u32)
     // actually changed since last frame — see PREV_MOUSE_BUTTONS's doc
     // comment for why calling it unconditionally every frame broke
     // btnp() into firing continuously while a button was held.
-    let px = pyxel_core::pyxel();
+    let mut px = pyxel_core::pyxel();
     let mouse_buttons =
         (u32::from(poll(ID_MOUSE_LEFT)   != 0))
         | (u32::from(poll(ID_MOUSE_RIGHT)  != 0) << 1)
@@ -416,7 +416,7 @@ pub unsafe fn inject_gamepad_axis_input(state: unsafe extern "C" fn(u32, u32, u3
         }
     };
 
-    let px = pyxel_core::pyxel();
+    let mut px = pyxel_core::pyxel();
     px.set_button_value(GAMEPAD1_AXIS_LEFTX,  poll(INDEX_ANALOG_LEFT,  ID_ANALOG_X));
     px.set_button_value(GAMEPAD1_AXIS_LEFTY,  poll(INDEX_ANALOG_LEFT,  ID_ANALOG_Y));
     px.set_button_value(GAMEPAD1_AXIS_RIGHTX, poll(INDEX_ANALOG_RIGHT, ID_ANALOG_X));
@@ -453,7 +453,7 @@ pub unsafe fn inject_gamepad2_axis_input(state: unsafe extern "C" fn(u32, u32, u
         }
     };
 
-    let px = pyxel_core::pyxel();
+    let mut px = pyxel_core::pyxel();
     px.set_button_value(GAMEPAD2_AXIS_LEFTX,  poll(INDEX_ANALOG_LEFT,  ID_ANALOG_X));
     px.set_button_value(GAMEPAD2_AXIS_LEFTY,  poll(INDEX_ANALOG_LEFT,  ID_ANALOG_Y));
     px.set_button_value(GAMEPAD2_AXIS_RIGHTX, poll(INDEX_ANALOG_RIGHT, ID_ANALOG_X));
@@ -480,7 +480,7 @@ pub unsafe fn inject_gamepad2_axis_input(state: unsafe extern "C" fn(u32, u32, u
 /// KEY_* equivalent to report in the first place.
 pub unsafe fn inject_keyboard_input(state: unsafe extern "C" fn(u32, u32, u32, u32) -> i16) {
     const RETRO_DEVICE_KEYBOARD: u32 = 3;
-    let px = pyxel_core::pyxel();
+    let mut px = pyxel_core::pyxel();
     for (i, &(retrok, key)) in RETROK_TABLE.iter().enumerate() {
         let pressed = state(0, RETRO_DEVICE_KEYBOARD, 0, retrok) != 0;
         if pressed != PREV_KEYBOARD_KEYS[i] {

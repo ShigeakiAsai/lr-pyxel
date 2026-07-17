@@ -278,13 +278,15 @@ pub unsafe extern "C" fn retro_init() {
     std::env::set_var("SDL_AUDIODRIVER", "dummy");
 
     // Initialize Pyxel engine in headless mode
-    pyxel_init(
+    if let Err(e) = pyxel_init(
         SCREEN_W, SCREEN_H,
         Some("lr-pyxel"),
         Some(FPS),
         None, None, None, None,
         Some(true),        // headless = true
-    );
+    ) {
+        eprintln!("[lr-pyxel] warning: pyxel_init failed: {e}");
+    }
 
     // Initialize BlipBuf for audio rendering
     // Use 1024 to accommodate both 30fps (735 samples) and 60fps (368 samples)
@@ -569,7 +571,8 @@ unsafe fn reset_color_palette() {
 unsafe fn reset_channel_gains() {
     if PYXEL_READY {
         for ch in pyxel_core::channels().iter() {
-            let channel = &mut *ch.get();
+            let mut guard = ch.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let channel = &mut *guard;
             channel.gain = pyxel_core::DEFAULT_CHANNEL_GAIN;
             channel.detune = 0;
         }
@@ -862,7 +865,9 @@ pub unsafe extern "C" fn retro_load_game(game: *const c_void) -> bool {
         // canvas is always allocated to match exactly). Safe to call
         // headless: internally gated behind `if !is_headless()` for the
         // windowing-related side effects.
-        pyxel_core::pyxel().set_screen_size(GAME_W, GAME_H);
+        if let Err(e) = pyxel_core::pyxel().set_screen_size(GAME_W, GAME_H) {
+            eprintln!("[lr-pyxel] warning: set_screen_size failed: {e}");
+        }
         GAME_FPS = 30;
         RETRO_FRAME_COUNT = 0;
         *pyxel_core::frame_count() = 0;
@@ -929,7 +934,9 @@ pub unsafe extern "C" fn retro_load_game(game: *const c_void) -> bool {
             eprintln!("[lr-pyxel] parsed init: w={w} h={h} fps={fps}");
             GAME_W   = w;
             GAME_H   = h;
-            pyxel_core::pyxel().set_screen_size(w, h);
+            if let Err(e) = pyxel_core::pyxel().set_screen_size(w, h) {
+                eprintln!("[lr-pyxel] warning: set_screen_size failed: {e}");
+            }
             GAME_FPS = fps;
         } else {
             eprintln!("[lr-pyxel] parse_pyxel_init: not found, using defaults");
@@ -1201,7 +1208,7 @@ pub unsafe extern "C" fn retro_run() {
             });
             LR_FRAME_COUNT += 1;
 
-            pyxel_core::pyxel().flip_screen();
+            pyxel_core::Pyxel::flip_screen();
         }
 
     } else {
@@ -1266,7 +1273,9 @@ unsafe fn launch_frontend() {
     PY_DRAW   = None;
     GAME_W   = 128;
     GAME_H   = 128;
-    pyxel_core::pyxel().set_screen_size(GAME_W, GAME_H);
+    if let Err(e) = pyxel_core::pyxel().set_screen_size(GAME_W, GAME_H) {
+        eprintln!("[lr-pyxel] warning: set_screen_size failed: {e}");
+    }
     GAME_FPS = 30;
     RETRO_FRAME_COUNT = 0;
     *pyxel_core::frame_count() = 0;
@@ -1372,7 +1381,9 @@ unsafe fn load_game_from_path(path: &str) {
             eprintln!("[lr-pyxel] frontend launch: w={w} h={h} fps={fps}");
             GAME_W   = w;
             GAME_H   = h;
-            pyxel_core::pyxel().set_screen_size(w, h);
+            if let Err(e) = pyxel_core::pyxel().set_screen_size(w, h) {
+                eprintln!("[lr-pyxel] warning: set_screen_size failed: {e}");
+            }
             GAME_FPS = fps;
         }
     }

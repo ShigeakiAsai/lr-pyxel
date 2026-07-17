@@ -34,11 +34,11 @@ pub unsafe fn submit_pyxel_frame() {
     // width here means this code doesn't need to know or care whether
     // the canvas is fixed-size or resized per game — it's always correct
     // either way.
-    let src_w = (*screen_rc.get()).width() as usize;
+    let src_w = (*screen_rc.as_ptr()).width() as usize;
     let dst_w = (GAME_W as usize).min(src_w);
     let dst_h = (GAME_H as usize).min(*height() as usize);
 
-    let src: *const u8 = (*screen_rc.get()).data_ptr() as *const u8;
+    let src: *const u8 = (*screen_rc.as_ptr()).data_ptr() as *const u8;
 
     let mut fb = vec![0u16; dst_w * dst_h];
     for y in 0..dst_h {

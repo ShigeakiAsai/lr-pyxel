@@ -33,15 +33,51 @@ fn warn_deprecated_once(key: &'static str, message: &str) {
             // captures the raw process stdout) — println!'s output
             // never passed through sys.stdout for Python-level
             // redirection to intercept in the first place.
+            //
+            // `message` is printed verbatim (no added wrapper text) —
+            // upstream's own deprecation_warning! macro is just
+            // `println!($msg)`, and upstream's own test suite asserts
+            // on the captured stdout matching that exact literal
+            // string (e.g. "Tone.noise is deprecated. Use Tone.mode
+            // instead.\n"), so every call site below passes the exact
+            // upstream wording, not a paraphrase.
             pyo3::Python::with_gil(|py| {
                 if let Ok(builtins) = py.import_bound("builtins") {
                     if let Ok(print_fn) = builtins.getattr("print") {
-                        let _ = print_fn.call1((format!("Warning: {message} is deprecated"),));
+                        let _ = print_fn.call1((message,));
                     }
                 }
             });
         }
     }
+}
+
+// Mirrors upstream's own validate_index!/invalid_index_error! macros
+// (crates/pyxel-binding/src/utils.rs) — same wording ("$parameter must
+// be a valid $resource index"), same bounds check. Several places in
+// this file indexed pyxel_core::images()/tilemaps()/channels()/
+// sounds()/musics() directly with a caller-supplied index and no
+// bounds check at all — an out-of-range index (e.g.
+// pyxel.blt(0, 0, 999, ...)) then panicked on the raw Vec index
+// instead of raising a Python exception. A Rust panic raised from
+// PyO3-called code crosses the retro_run() FFI boundary and aborts
+// the whole process rather than being catchable, so every one of
+// these needs the same guard upstream already has.
+macro_rules! validate_index {
+    ($index:expr, $len:expr, $parameter:literal, $resource:literal) => {
+        if ($index as usize) >= $len {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                concat!($parameter, " must be a valid ", $resource, " index")
+            ));
+        }
+    };
+    ($index:expr, $len:expr, $parameter:literal, $resource:literal, list) => {
+        if ($index as usize) >= $len {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                concat!($parameter, " must contain only valid ", $resource, " indices")
+            ));
+        }
+    };
 }
 
 // ---------------------------------------------------------------------------
@@ -68,13 +104,16 @@ macro_rules! define_live_list {
         #[pymethods]
         impl $wrapper {
             pub fn __len__(&self) -> usize {
-                unsafe { (&*self.parent.get()).$field.len() }
+                {
+                    self.parent.lock().unwrap_or_else(std::sync::PoisonError::into_inner).$field.len()
+                }
             }
 
             pub fn __getitem__(&self, py: pyo3::Python, idx: pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<pyo3::PyObject> {
                 use pyo3::IntoPy;
-                unsafe {
-                    let v = &(&*self.parent.get()).$field;
+                {
+                    let guard = self.parent.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                    let v = &guard.$field;
                     let len = v.len() as i64;
                     if let Ok(i) = idx.extract::<i64>() {
                         let i = if i < 0 { i + len } else { i };
@@ -105,8 +144,9 @@ macro_rules! define_live_list {
             }
 
             pub fn __setitem__(&self, idx: pyo3::Bound<'_, pyo3::PyAny>, val: pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<()> {
-                unsafe {
-                    let v = &mut (&mut *self.parent.get()).$field;
+                {
+                    let mut guard = self.parent.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                    let v = &mut guard.$field;
                     let len = v.len() as i64;
                     if let Ok(i) = idx.extract::<i64>() {
                         let i = if i < 0 { i + len } else { i };
@@ -142,8 +182,9 @@ macro_rules! define_live_list {
             }
 
             pub fn __delitem__(&self, idx: pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<()> {
-                unsafe {
-                    let v = &mut (&mut *self.parent.get()).$field;
+                {
+                    let mut guard = self.parent.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                    let v = &mut guard.$field;
                     let len = v.len() as i64;
                     if let Ok(i) = idx.extract::<i64>() {
                         let i = if i < 0 { i + len } else { i };
@@ -170,12 +211,13 @@ macro_rules! define_live_list {
             }
 
             pub fn append(&self, val: $elem) {
-                unsafe { (&mut *self.parent.get()).$field.push(val); }
+                { self.parent.lock().unwrap_or_else(std::sync::PoisonError::into_inner).$field.push(val); }
             }
 
             pub fn insert(&self, idx: usize, val: $elem) {
-                unsafe {
-                    let v = &mut (&mut *self.parent.get()).$field;
+                {
+                    let mut guard = self.parent.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                    let v = &mut guard.$field;
                     let idx = idx.min(v.len());
                     v.insert(idx, val);
                 }
@@ -183,8 +225,9 @@ macro_rules! define_live_list {
 
             #[pyo3(signature = (idx=None))]
             pub fn pop(&self, idx: Option<i64>) -> PyResult<$elem> {
-                unsafe {
-                    let v = &mut (&mut *self.parent.get()).$field;
+                {
+                    let mut guard = self.parent.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                    let v = &mut guard.$field;
                     let len = v.len() as i64;
                     if len == 0 {
                         return Err(pyo3::exceptions::PyIndexError::new_err("pop from empty list"));
@@ -199,35 +242,35 @@ macro_rules! define_live_list {
             }
 
             pub fn extend(&self, vals: Vec<$elem>) {
-                unsafe { (&mut *self.parent.get()).$field.extend(vals); }
+                { (&mut *self.parent.lock().unwrap_or_else(std::sync::PoisonError::into_inner)).$field.extend(vals); }
             }
 
             pub fn clear(&self) {
-                unsafe { (&mut *self.parent.get()).$field.clear(); }
+                { (&mut *self.parent.lock().unwrap_or_else(std::sync::PoisonError::into_inner)).$field.clear(); }
             }
 
             pub fn __repr__(&self) -> String {
-                unsafe { format!("{:?}", (&*self.parent.get()).$field) }
+                { format!("{:?}", (&*self.parent.lock().unwrap_or_else(std::sync::PoisonError::into_inner)).$field) }
             }
 
             pub fn __bool__(&self) -> bool {
-                unsafe { !(&*self.parent.get()).$field.is_empty() }
+                { !(&*self.parent.lock().unwrap_or_else(std::sync::PoisonError::into_inner)).$field.is_empty() }
             }
 
             pub fn __reversed__(&self) -> Vec<$elem> {
-                unsafe { (&*self.parent.get()).$field.iter().rev().copied().collect() }
+                { (&*self.parent.lock().unwrap_or_else(std::sync::PoisonError::into_inner)).$field.iter().rev().copied().collect() }
             }
 
             pub fn __iadd__(&self, vals: Vec<$elem>) {
-                unsafe { (&mut *self.parent.get()).$field.extend(vals); }
+                { (&mut *self.parent.lock().unwrap_or_else(std::sync::PoisonError::into_inner)).$field.extend(vals); }
             }
 
             pub fn __eq__(&self, other: Vec<$elem>) -> bool {
-                unsafe { (&*self.parent.get()).$field == other }
+                { (&*self.parent.lock().unwrap_or_else(std::sync::PoisonError::into_inner)).$field == other }
             }
 
             pub fn to_list(&self) -> Vec<$elem> {
-                unsafe { (&*self.parent.get()).$field.clone() }
+                { (&*self.parent.lock().unwrap_or_else(std::sync::PoisonError::into_inner)).$field.clone() }
             }
         }
     };
@@ -304,11 +347,12 @@ pub fn blt(x: f32, y: f32, img: pyo3::Bound<'_, pyo3::PyAny>, u: f32, v: f32, w:
     unsafe {
         if !PYXEL_READY { return Ok(()); }
         if let Ok(idx) = img.extract::<u32>() {
+            validate_index!(idx, pyxel_core::images().len(), "img", "image");
             pyxel_core::pyxel().draw_image(x, y, idx, u, v, w, h, colkey, rotate, scale);
         } else if let Ok(pyimg) = img.extract::<pyo3::PyRef<PyImage>>() {
             let src = pyimg.rc().clone();
             let screen = pyxel_core::screen();
-            let dst = &mut *screen.get();
+            let dst = &mut *screen.as_ptr();
             dst.draw_image(x, y, &src, u, v, w, h, colkey, rotate, scale);
         } else {
             // Previously fell through silently here (no else branch at
@@ -317,7 +361,7 @@ pub fn blt(x: f32, y: f32, img: pyo3::Bound<'_, pyo3::PyAny>, u: f32, v: f32, w:
             // "not_an_image", ...) expected a TypeError but nothing was
             // raised at all).
             return Err(pyo3::exceptions::PyTypeError::new_err(
-                "img must be u32, Image"
+                "img must be int or Image"
             ));
         }
     }
@@ -336,12 +380,17 @@ pub fn bltm(x: f32, y: f32, tm: pyo3::Bound<'_, pyo3::PyAny>, u: f32, v: f32, w:
     unsafe {
         if !PYXEL_READY { return Ok(()); }
         if let Ok(idx) = tm.extract::<u32>() {
+            validate_index!(idx, pyxel_core::tilemaps().len(), "tm", "tilemap");
             pyxel_core::pyxel().draw_tilemap(x, y, idx, u, v, w, h, colkey, rotate, scale);
         } else if let Ok(pytm) = tm.extract::<pyo3::PyRef<PyTilemap>>() {
             let src = pytm.rc().clone();
             let screen = pyxel_core::screen();
-            let dst = &mut *screen.get();
+            let dst = &mut *screen.as_ptr();
             dst.draw_tilemap(x, y, &src, u, v, w, h, colkey, rotate, scale);
+        } else {
+            return Err(pyo3::exceptions::PyTypeError::new_err(
+                "tm must be int or Tilemap"
+            ));
         }
     }
     Ok(())
@@ -367,15 +416,16 @@ pub fn blt3d(
     unsafe {
         if !PYXEL_READY { return Ok(()); }
         if let Ok(idx) = img.extract::<u32>() {
+            validate_index!(idx, pyxel_core::images().len(), "img", "image");
             pyxel_core::pyxel().draw_image_3d(x, y, w, h, idx, pos, rot, fov, colkey);
         } else if let Ok(pyimg) = img.extract::<pyo3::PyRef<PyImage>>() {
             let src = pyimg.rc().clone();
             let screen = pyxel_core::screen();
-            let dst = &mut *screen.get();
+            let dst = &mut *screen.as_ptr();
             dst.draw_image_3d(x, y, w, h, &src, pos, rot, fov, colkey);
         } else {
             return Err(pyo3::exceptions::PyTypeError::new_err(
-                "img must be an image bank index (int) or an Image instance"
+                "img must be int or Image"
             ));
         }
     }
@@ -398,15 +448,16 @@ pub fn bltm3d(
     unsafe {
         if !PYXEL_READY { return Ok(()); }
         if let Ok(idx) = tm.extract::<u32>() {
+            validate_index!(idx, pyxel_core::tilemaps().len(), "tm", "tilemap");
             pyxel_core::pyxel().draw_tilemap_3d(x, y, w, h, idx, pos, rot, fov, colkey);
         } else if let Ok(pytm) = tm.extract::<pyo3::PyRef<PyTilemap>>() {
             let src = pytm.rc().clone();
             let screen = pyxel_core::screen();
-            let dst = &mut *screen.get();
+            let dst = &mut *screen.as_ptr();
             dst.draw_tilemap_3d(x, y, w, h, &src, pos, rot, fov, colkey);
         } else {
             return Err(pyo3::exceptions::PyTypeError::new_err(
-                "tm must be a tilemap bank index (int) or a Tilemap instance"
+                "tm must be int or Tilemap"
             ));
         }
     }
@@ -416,10 +467,8 @@ pub fn bltm3d(
 // Deprecated: pyxel.image(n) → use pyxel.images[n] instead
 #[pyfunction]
 pub fn image(img: u32) -> PyResult<PyImage> {
-    warn_deprecated_once("image()", "pyxel.image() (use pyxel.images[n] instead)");
-    if img as usize >= pyxel_core::NUM_IMAGES as usize {
-        return Err(pyo3::exceptions::PyValueError::new_err("Invalid image index"));
-    }
+    warn_deprecated_once("image()", "pyxel.image(img) is deprecated. Use pyxel.images[img] instead.");
+    validate_index!(img, pyxel_core::NUM_IMAGES as usize, "img", "image");
     Ok(PyImage { image: pyxel_core::images()[img as usize].clone() })
 }
 
@@ -427,10 +476,8 @@ pub fn image(img: u32) -> PyResult<PyImage> {
 #[pyfunction]
 #[pyo3(name = "tilemap")]
 pub fn tilemap_fn(tm: u32) -> PyResult<PyTilemap> {
-    warn_deprecated_once("tilemap()", "pyxel.tilemap() (use pyxel.tilemaps[n] instead)");
-    if tm as usize >= pyxel_core::NUM_TILEMAPS as usize {
-        return Err(pyo3::exceptions::PyValueError::new_err("Invalid tilemap index"));
-    }
+    warn_deprecated_once("tilemap()", "pyxel.tilemap(tm) is deprecated. Use pyxel.tilemaps[tm] instead.");
+    validate_index!(tm, pyxel_core::NUM_TILEMAPS as usize, "tm", "tilemap");
     Ok(PyTilemap { tilemap: pyxel_core::tilemaps()[tm as usize].clone() })
 }
 
@@ -452,7 +499,7 @@ pub fn image_load(bank: usize, path: &str, x: i32, y: i32, include_colors: bool)
             )));
         };
         // RcImage = Rc<UnsafeCell<Image>>; get a mutable reference via the cell
-        let image: &mut pyxel_core::Image = &mut *rc_image.get();
+        let image: &mut pyxel_core::Image = &mut *rc_image.as_ptr();
         image
             .load(x, y, path, Some(include_colors))
             .map_err(pyo3::exceptions::PyOSError::new_err)
@@ -475,7 +522,7 @@ pub fn image_pset(bank: usize, x: f32, y: f32, color: u8) -> PyResult<()> {
                 "image bank {bank} does not exist"
             )));
         };
-        let image: &mut pyxel_core::Image = &mut *rc_image.get();
+        let image: &mut pyxel_core::Image = &mut *rc_image.as_ptr();
         image.set_pixel(x, y, color);
         Ok(())
     }
@@ -670,7 +717,8 @@ pub fn sound_set(
                 "sound bank {no} does not exist"
             )));
         };
-        let sound: &mut pyxel_core::Sound = &mut *rc_sound.get();
+        let mut guard = rc_sound.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let sound: &mut pyxel_core::Sound = &mut *guard;
         sound
             .set(notes, tones, volumes, effects, speed)
             .map_err(pyo3::exceptions::PyValueError::new_err)
@@ -712,42 +760,54 @@ pub fn play(ch: u32, snd: pyo3::Bound<'_, pyo3::PyAny>, sec: Option<f32>, r#loop
         // Found via test_play_invalid_channel (pyxel.play(999, 0)),
         // which crashed RetroArch entirely rather than raising
         // cleanly.
-        if ch as usize >= pyxel_core::channels().len() {
-            return Err(pyo3::exceptions::PyValueError::new_err("Invalid channel index"));
-        }
+        validate_index!(ch, pyxel_core::channels().len(), "ch", "channel");
         let should_loop   = r#loop.unwrap_or(false);
         let should_resume = resume.unwrap_or(false);
         if tick.is_some() {
-            warn_deprecated_once("play.tick", "play()'s tick argument (use sec instead)");
+            warn_deprecated_once("play.tick", "tick option of pyxel.play is deprecated. Use sec option instead.");
         }
         let sec = tick.map(|t| t / 120.0).or(sec);
         if let Ok(idx) = snd.extract::<u32>() {
-            if idx as usize >= pyxel_core::sounds().len() {
-                return Err(pyo3::exceptions::PyValueError::new_err("Invalid sound index"));
-            }
-            pyxel_core::pyxel().play_sound(ch, idx, sec, should_loop, should_resume);
+            validate_index!(idx, pyxel_core::sounds().len(), "snd", "sound");
+            pyxel_core::pyxel().play_sound(ch, idx, sec, should_loop, should_resume)
+                .map_err(pyo3::exceptions::PyValueError::new_err)?;
         } else if let Ok(seq) = snd.extract::<Vec<u32>>() {
             if seq.iter().any(|&i| i as usize >= pyxel_core::sounds().len()) {
-                return Err(pyo3::exceptions::PyValueError::new_err("Invalid sound index"));
+                return Err(pyo3::exceptions::PyValueError::new_err(
+                    "snd must contain only valid sound indices"
+                ));
             }
-            pyxel_core::pyxel().play(ch, &seq, sec, should_loop, should_resume);
+            pyxel_core::pyxel().play(ch, &seq, sec, should_loop, should_resume)
+                .map_err(pyo3::exceptions::PyValueError::new_err)?;
         } else if let Ok(mml) = snd.extract::<String>() {
             let _lock = pyxel_core::AudioLock::lock();
-            let channel = &mut *pyxel_core::channels()[ch as usize].get();
+            let rc_channel = pyxel_core::channels()[ch as usize].clone();
+            let mut guard = rc_channel.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let channel = &mut *guard;
+            // MML syntax errors specifically map to the generic
+            // Exception, not ValueError — matches upstream's own
+            // binding (the (String, {...}) branch there uses
+            // PyException::new_err, unlike every other branch here).
             channel.play_mml(&mml, sec, should_loop, should_resume)
-                .map_err(pyo3::exceptions::PyValueError::new_err)?;
+                .map_err(pyo3::exceptions::PyException::new_err)?;
         } else if let Ok(snd_ref) = snd.extract::<pyo3::PyRef<PySound>>() {
             let _lock = pyxel_core::AudioLock::lock();
-            let channel = &mut *pyxel_core::channels()[ch as usize].get();
-            channel.play(vec![snd_ref.rc().clone()], sec, should_loop, should_resume);
+            let rc_channel = pyxel_core::channels()[ch as usize].clone();
+            let mut guard = rc_channel.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let channel = &mut *guard;
+            channel.play(vec![snd_ref.rc().clone()], sec, should_loop, should_resume)
+                .map_err(pyo3::exceptions::PyValueError::new_err)?;
         } else if let Ok(snd_refs) = snd.extract::<Vec<pyo3::PyRef<PySound>>>() {
             let sounds: Vec<_> = snd_refs.iter().map(|s| s.rc().clone()).collect();
             let _lock = pyxel_core::AudioLock::lock();
-            let channel = &mut *pyxel_core::channels()[ch as usize].get();
-            channel.play(sounds, sec, should_loop, should_resume);
+            let rc_channel = pyxel_core::channels()[ch as usize].clone();
+            let mut guard = rc_channel.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let channel = &mut *guard;
+            channel.play(sounds, sec, should_loop, should_resume)
+                .map_err(pyo3::exceptions::PyValueError::new_err)?;
         } else {
             return Err(pyo3::exceptions::PyTypeError::new_err(
-                "snd must be u32, Vec<u32>, Sound, list of Sound, or MML str"
+                "snd must be int, list[int], Sound, list[Sound], or str"
             ));
         }
         Ok(())
@@ -762,14 +822,13 @@ pub fn play(ch: u32, snd: pyo3::Bound<'_, pyo3::PyAny>, sec: Option<f32>, r#loop
 pub fn playm(msc: u32, sec: Option<f32>, r#loop: Option<bool>, tick: Option<f32>) -> PyResult<()> {
     unsafe {
         if !PYXEL_READY { return Ok(()); }
-        if msc as usize >= pyxel_core::musics().len() {
-            return Err(pyo3::exceptions::PyValueError::new_err("Invalid music index"));
-        }
+        validate_index!(msc, pyxel_core::musics().len(), "msc", "music");
         if tick.is_some() {
-            warn_deprecated_once("playm.tick", "playm()'s tick argument (use sec instead)");
+            warn_deprecated_once("playm.tick", "tick option of pyxel.playm is deprecated. Use sec option instead.");
         }
         let sec = tick.map(|t| t / 120.0).or(sec);
-        pyxel_core::pyxel().play_music(msc, sec, r#loop.unwrap_or(false));
+        pyxel_core::pyxel().play_music(msc, sec, r#loop.unwrap_or(false))
+            .map_err(pyo3::exceptions::PyValueError::new_err)?;
     }
     Ok(())
 }
@@ -782,9 +841,7 @@ pub fn stop(ch: Option<u32>) -> PyResult<()> {
         if !PYXEL_READY { return Ok(()); }
         match ch {
             Some(c) => {
-                if c as usize >= pyxel_core::channels().len() {
-                    return Err(pyo3::exceptions::PyValueError::new_err("Invalid channel index"));
-                }
+                validate_index!(c, pyxel_core::channels().len(), "ch", "channel");
                 pyxel_core::pyxel().stop_channel(c);
             }
             None => pyxel_core::pyxel().stop_all_channels(),
@@ -812,9 +869,7 @@ pub fn gen_bgm(preset: i32, transp: i32, instr: i32, seed: u64, play: Option<boo
 pub fn play_pos(ch: u32) -> PyResult<Option<(u32, f32)>> {
     unsafe {
         if !PYXEL_READY { return Ok(None); }
-        if ch as usize >= pyxel_core::channels().len() {
-            return Err(pyo3::exceptions::PyValueError::new_err("Invalid channel index"));
-        }
+        validate_index!(ch, pyxel_core::channels().len(), "ch", "channel");
         Ok(pyxel_core::pyxel().play_position(ch))
     }
 }
@@ -823,33 +878,27 @@ pub fn play_pos(ch: u32) -> PyResult<Option<(u32, f32)>> {
 #[pyfunction]
 #[pyo3(name = "sound")]
 pub fn sound_fn(snd: u32) -> PyResult<PySound> {
-    warn_deprecated_once("sound()", "pyxel.sound() (use pyxel.sounds[n] instead)");
-    if snd as usize >= pyxel_core::NUM_SOUNDS as usize {
-        return Err(pyo3::exceptions::PyValueError::new_err("Invalid sound index"));
-    }
-    Ok(PySound { sound_ref: SoundRef::Bank(snd as usize) })
+    warn_deprecated_once("sound()", "pyxel.sound(snd) is deprecated. Use pyxel.sounds[snd] instead.");
+    validate_index!(snd, pyxel_core::NUM_SOUNDS as usize, "snd", "sound");
+    Ok(PySound { sound: pyxel_core::sounds()[snd as usize].clone() })
 }
 
 // Deprecated: pyxel.music(n) → use pyxel.musics[n]
 #[pyfunction]
 #[pyo3(name = "music")]
 pub fn music_fn(msc: u32) -> PyResult<PyMusic> {
-    warn_deprecated_once("music()", "pyxel.music() (use pyxel.musics[n] instead)");
-    if msc as usize >= pyxel_core::NUM_MUSICS as usize {
-        return Err(pyo3::exceptions::PyValueError::new_err("Invalid music index"));
-    }
-    Ok(PyMusic { music_ref: MusicRef::Bank(msc as usize) })
+    warn_deprecated_once("music()", "pyxel.music(msc) is deprecated. Use pyxel.musics[msc] instead.");
+    validate_index!(msc, pyxel_core::NUM_MUSICS as usize, "msc", "music");
+    Ok(PyMusic { music: pyxel_core::musics()[msc as usize].clone() })
 }
 
 // Deprecated: pyxel.channel(n) → use pyxel.channels[n]
 #[pyfunction]
 #[pyo3(name = "channel")]
 pub fn channel_fn(ch: u32) -> PyResult<PyChannel> {
-    warn_deprecated_once("channel()", "pyxel.channel() (use pyxel.channels[n] instead)");
-    if ch as usize >= pyxel_core::NUM_CHANNELS as usize {
-        return Err(pyo3::exceptions::PyValueError::new_err("Invalid channel index"));
-    }
-    Ok(PyChannel { channel_ref: ChannelRef::Bank(ch as usize) })
+    warn_deprecated_once("channel()", "pyxel.channel(ch) is deprecated. Use pyxel.channels[ch] instead.");
+    validate_index!(ch, pyxel_core::NUM_CHANNELS as usize, "ch", "channel");
+    Ok(PyChannel { channel: pyxel_core::channels()[ch as usize].clone() })
 }
 
 // -- input -------------------------------------------------------------------
@@ -903,7 +952,7 @@ pub fn init(
     width: u32, height: u32,
     title: Option<&str>, caption: Option<&str>, fps: Option<u32>, quit_key: Option<u32>,
     display_scale: Option<u32>, capture_scale: Option<u32>, capture_sec: Option<u32>,
-) {
+) -> PyResult<()> {
     // caption predates upstream's rename to title in an early Pyxel
     // version — some older scripts (e.g. this exact NyanCat sample)
     // still call init(..., caption="...") rather than title=. Found
@@ -928,7 +977,8 @@ pub fn init(
         // values), superseding whatever the pre-execution static parse
         // guessed. Also updates pyxel_core::width()/height().
         if PYXEL_READY {
-            pyxel_core::pyxel().set_screen_size(GAME_W, GAME_H);
+            pyxel_core::pyxel().set_screen_size(GAME_W, GAME_H)
+                .map_err(pyo3::exceptions::PyValueError::new_err)?;
         }
 
         // Update pyxel.width/height module attributes to reflect game size
@@ -953,6 +1003,7 @@ pub fn init(
             env(37, &geometry as *const _ as *mut c_void);
         }
     }
+    Ok(())
 }
 
 // run(update, draw) — caches the callbacks for the libretro frame loop.
@@ -1672,8 +1723,22 @@ pub fn icon(data: pyo3::Bound<'_, pyo3::PyAny>, scale: u32, colkey: Option<u8>) 
             "'{type_name}' object is not an instance of 'Sequence'"
         ))
     })?;
-    let _ = (items, scale, colkey);
-    // no-op in headless mode
+    // Previously this discarded `items`/`scale`/`colkey` and always
+    // succeeded — content validation (empty rows, bad hex digits,
+    // scale=0, dimension overflow, out-of-palette colors) never ran
+    // at all. pyxel_core::Pyxel::set_icon() already does all of this
+    // validation itself, then early-returns Ok(()) once past it if
+    // is_headless() — i.e. it's already exactly the "validate for
+    // real, then no-op the actual OS window icon" behavior this
+    // function needs, so delegate to it directly rather than
+    // reimplementing the checks here (matches upstream's own binding,
+    // which does the same one-line delegation).
+    unsafe {
+        if PYXEL_READY {
+            pyxel_core::pyxel().set_icon(&items, scale, colkey)
+                .map_err(pyo3::exceptions::PyValueError::new_err)?;
+        }
+    }
     Ok(())
 }
 
@@ -1716,7 +1781,8 @@ pub fn resize(width: u32, height: u32) -> PyResult<()> {
         // script calling pyxel.resize() at runtime would have its
         // rendering silently truncated to the old size.
         if PYXEL_READY {
-            pyxel_core::pyxel().set_screen_size(width, height);
+            pyxel_core::pyxel().set_screen_size(width, height)
+                .map_err(pyo3::exceptions::PyValueError::new_err)?;
         }
         // pyxel.width/height are frozen as static module attributes by
         // init() (see there for why) — once set, a static attribute
@@ -1772,14 +1838,28 @@ impl PyImage {
 #[pymethods]
 impl PyImage {
     #[new]
-    pub fn new(width: u32, height: u32) -> Self {
+    pub fn new(width: u32, height: u32) -> PyResult<Self> {
         // Previously this ignored width/height and always aliased the
         // fixed bank-0 image, so every pyxel.Image(w, h) instance shared
         // the same underlying canvas (see problem: dynamic Image creation
         // not supported, e.g. 11_offscreen.py). pyxel_core::Image::new()
         // allocates a genuinely independent image, not tied to any of the
         // fixed NUM_IMAGES banks.
-        PyImage { image: pyxel_core::Image::new(width, height) }
+        //
+        // Uses try_new() (a Result), not new() — new() calls
+        // .expect("image dimensions are too large") internally and
+        // panics on oversized dimensions instead of returning an error.
+        // A Rust panic raised from PyO3-called code crosses the
+        // retro_run() FFI boundary and aborts the whole process rather
+        // than raising a catchable Python exception (confirmed via
+        // upstream's own test_canvas_constructor_rejects_oversized_dimensions,
+        // which does exactly this: pyxel.Image(65536, 65536)). Matches
+        // upstream's own official binding (image_wrapper.rs), which
+        // uses try_new() + map_err(PyValueError::new_err) for the same
+        // reason.
+        pyxel_core::Image::try_new(width, height)
+            .map(|image| PyImage { image })
+            .map_err(pyo3::exceptions::PyValueError::new_err)
     }
 
     #[staticmethod]
@@ -1807,12 +1887,12 @@ impl PyImage {
 
     #[getter]
     pub fn width(&self) -> u32 {
-        unsafe { (&*self.rc().get()).width() }
+        unsafe { (&*self.rc().as_ptr()).width() }
     }
 
     #[getter]
     pub fn height(&self) -> u32 {
-        unsafe { (&*self.rc().get()).height() }
+        unsafe { (&*self.rc().as_ptr()).height() }
     }
 
     // data_ptr() -> ctypes array of c_uint8
@@ -1823,7 +1903,7 @@ impl PyImage {
     // noise effects).
     pub fn data_ptr(&self, py: Python) -> PyResult<PyObject> {
         unsafe {
-            let img = &mut *self.rc().get();
+            let img = &mut *self.rc().as_ptr();
             let size = (img.width() * img.height()) as usize;
             let ptr = img.data_ptr() as usize;
             let ctypes = py.import_bound("ctypes")?;
@@ -1851,9 +1931,9 @@ impl PyImage {
             ))
         })?;
         unsafe {
-            let img = &mut *self.rc().get();
+            let img = &mut *self.rc().as_ptr();
             let refs: Vec<&str> = items.iter().map(String::as_str).collect();
-            img.set(x, y, &refs);
+            img.set(x, y, &refs).map_err(pyo3::exceptions::PyValueError::new_err)?;
         }
         Ok(())
     }
@@ -1865,7 +1945,7 @@ impl PyImage {
         }
         let include_colors = include_colors.or(incl_colors);
         unsafe {
-            let img = &mut *self.rc().get();
+            let img = &mut *self.rc().as_ptr();
             img.load(x, y, filename, include_colors)
                 .map_err(pyo3::exceptions::PyException::new_err)
         }
@@ -1873,7 +1953,7 @@ impl PyImage {
 
     pub fn save(&self, filename: &str, scale: u32) -> PyResult<()> {
         unsafe {
-            let img = &*self.rc().get();
+            let img = &*self.rc().as_ptr();
             img.save(filename, scale)
                 .map_err(pyo3::exceptions::PyException::new_err)
         }
@@ -1882,7 +1962,7 @@ impl PyImage {
     #[pyo3(signature = (x=None, y=None, w=None, h=None))]
     pub fn clip(&self, x: Option<f32>, y: Option<f32>, w: Option<f32>, h: Option<f32>) -> PyResult<()> {
         unsafe {
-            let img = &mut *self.rc().get();
+            let img = &mut *self.rc().as_ptr();
             if let (Some(x), Some(y), Some(w), Some(h)) = (x, y, w, h) {
                 img.set_clip_rect(x, y, w, h);
             } else {
@@ -1895,7 +1975,7 @@ impl PyImage {
     #[pyo3(signature = (x=None, y=None))]
     pub fn camera(&self, x: Option<f32>, y: Option<f32>) -> PyResult<()> {
         unsafe {
-            let img = &mut *self.rc().get();
+            let img = &mut *self.rc().as_ptr();
             if let (Some(x), Some(y)) = (x, y) {
                 img.set_camera(x, y);
             } else {
@@ -1908,7 +1988,7 @@ impl PyImage {
     #[pyo3(signature = (col1=None, col2=None))]
     pub fn pal(&self, col1: Option<u8>, col2: Option<u8>) -> PyResult<()> {
         unsafe {
-            let img = &mut *self.rc().get();
+            let img = &mut *self.rc().as_ptr();
             if let (Some(c1), Some(c2)) = (col1, col2) {
                 img.map_color(c1, c2);
             } else {
@@ -1919,59 +1999,59 @@ impl PyImage {
     }
 
     pub fn dither(&self, alpha: f32) {
-        unsafe { (&mut *self.rc().get()).set_dithering(alpha); }
+        unsafe { (&mut *self.rc().as_ptr()).set_dithering(alpha); }
     }
 
     pub fn cls(&self, col: u8) {
-        unsafe { (&mut *self.rc().get()).clear(col); }
+        unsafe { (&mut *self.rc().as_ptr()).clear(col); }
     }
 
     pub fn pget(&self, x: f32, y: f32) -> u8 {
-        unsafe { (&*self.rc().get()).pixel(x, y) }
+        unsafe { (&*self.rc().as_ptr()).pixel(x, y) }
     }
 
     pub fn pset(&self, x: f32, y: f32, col: u8) {
-        unsafe { (&mut *self.rc().get()).set_pixel(x, y, col); }
+        unsafe { (&mut *self.rc().as_ptr()).set_pixel(x, y, col); }
     }
 
     pub fn line(&self, x1: f32, y1: f32, x2: f32, y2: f32, col: u8) {
-        unsafe { (&mut *self.rc().get()).draw_line(x1, y1, x2, y2, col); }
+        unsafe { (&mut *self.rc().as_ptr()).draw_line(x1, y1, x2, y2, col); }
     }
 
     pub fn rect(&self, x: f32, y: f32, w: f32, h: f32, col: u8) {
-        unsafe { (&mut *self.rc().get()).draw_rect(x, y, w, h, col); }
+        unsafe { (&mut *self.rc().as_ptr()).draw_rect(x, y, w, h, col); }
     }
 
     pub fn rectb(&self, x: f32, y: f32, w: f32, h: f32, col: u8) {
-        unsafe { (&mut *self.rc().get()).draw_rect_border(x, y, w, h, col); }
+        unsafe { (&mut *self.rc().as_ptr()).draw_rect_border(x, y, w, h, col); }
     }
 
     pub fn circ(&self, x: f32, y: f32, r: f32, col: u8) {
-        unsafe { (&mut *self.rc().get()).draw_circle(x, y, r, col); }
+        unsafe { (&mut *self.rc().as_ptr()).draw_circle(x, y, r, col); }
     }
 
     pub fn circb(&self, x: f32, y: f32, r: f32, col: u8) {
-        unsafe { (&mut *self.rc().get()).draw_circle_border(x, y, r, col); }
+        unsafe { (&mut *self.rc().as_ptr()).draw_circle_border(x, y, r, col); }
     }
 
     pub fn elli(&self, x: f32, y: f32, w: f32, h: f32, col: u8) {
-        unsafe { (&mut *self.rc().get()).draw_ellipse(x, y, w, h, col); }
+        unsafe { (&mut *self.rc().as_ptr()).draw_ellipse(x, y, w, h, col); }
     }
 
     pub fn ellib(&self, x: f32, y: f32, w: f32, h: f32, col: u8) {
-        unsafe { (&mut *self.rc().get()).draw_ellipse_border(x, y, w, h, col); }
+        unsafe { (&mut *self.rc().as_ptr()).draw_ellipse_border(x, y, w, h, col); }
     }
 
     pub fn tri(&self, x1: f32, y1: f32, x2: f32, y2: f32, x3: f32, y3: f32, col: u8) {
-        unsafe { (&mut *self.rc().get()).draw_triangle(x1, y1, x2, y2, x3, y3, col); }
+        unsafe { (&mut *self.rc().as_ptr()).draw_triangle(x1, y1, x2, y2, x3, y3, col); }
     }
 
     pub fn trib(&self, x1: f32, y1: f32, x2: f32, y2: f32, x3: f32, y3: f32, col: u8) {
-        unsafe { (&mut *self.rc().get()).draw_triangle_border(x1, y1, x2, y2, x3, y3, col); }
+        unsafe { (&mut *self.rc().as_ptr()).draw_triangle_border(x1, y1, x2, y2, x3, y3, col); }
     }
 
     pub fn fill(&self, x: f32, y: f32, col: u8) {
-        unsafe { (&mut *self.rc().get()).flood_fill(x, y, col); }
+        unsafe { (&mut *self.rc().as_ptr()).flood_fill(x, y, col); }
     }
 
     #[pyo3(signature = (x, y, img, u, v, w, h, colkey=None, rotate=None, scale=None))]
@@ -1982,15 +2062,15 @@ impl PyImage {
             let src = if let Ok(idx) = img.extract::<u32>() {
                 pyxel_core::images().get(idx as usize)
                     .cloned()
-                    .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("Invalid image index"))?
+                    .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("img must be a valid image index"))?
             } else if let Ok(pyimg) = img.extract::<pyo3::PyRef<PyImage>>() {
                 pyimg.rc().clone()
             } else {
                 return Err(pyo3::exceptions::PyTypeError::new_err(
-                    "img must be an image bank index (int) or an Image instance"
+                    "img must be int or Image"
                 ));
             };
-            let dst = &mut *self.rc().get();
+            let dst = &mut *self.rc().as_ptr();
             dst.draw_image(x, y, &src, u, v, w, h, colkey, rotate, scale);
         }
         Ok(())
@@ -2005,15 +2085,15 @@ impl PyImage {
             let src = if let Ok(idx) = tm.extract::<u32>() {
                 pyxel_core::tilemaps().get(idx as usize)
                     .cloned()
-                    .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("Invalid tilemap index"))?
+                    .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("tm must be a valid tilemap index"))?
             } else if let Ok(pytm) = tm.extract::<pyo3::PyRef<PyTilemap>>() {
                 pytm.rc().clone()
             } else {
                 return Err(pyo3::exceptions::PyTypeError::new_err(
-                    "tm must be a tilemap bank index (int) or a Tilemap instance"
+                    "tm must be int or Tilemap"
                 ));
             };
-            let dst = &mut *self.rc().get();
+            let dst = &mut *self.rc().as_ptr();
             dst.draw_tilemap(x, y, &src, u, v, w, h, colkey, rotate, scale);
         }
         Ok(())
@@ -2031,15 +2111,15 @@ impl PyImage {
             let src = if let Ok(idx) = img.extract::<u32>() {
                 pyxel_core::images().get(idx as usize)
                     .cloned()
-                    .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("Invalid image index"))?
+                    .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("img must be a valid image index"))?
             } else if let Ok(pyimg) = img.extract::<pyo3::PyRef<PyImage>>() {
                 pyimg.rc().clone()
             } else {
                 return Err(pyo3::exceptions::PyTypeError::new_err(
-                    "img must be an image bank index (int) or an Image instance"
+                    "img must be int or Image"
                 ));
             };
-            let dst = &mut *self.rc().get();
+            let dst = &mut *self.rc().as_ptr();
             dst.draw_image_3d(x, y, w, h, &src, pos, rot, fov, colkey);
         }
         Ok(())
@@ -2053,15 +2133,15 @@ impl PyImage {
             let src = if let Ok(idx) = tm.extract::<u32>() {
                 pyxel_core::tilemaps().get(idx as usize)
                     .cloned()
-                    .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("Invalid tilemap index"))?
+                    .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("tm must be a valid tilemap index"))?
             } else if let Ok(pytm) = tm.extract::<pyo3::PyRef<PyTilemap>>() {
                 pytm.rc().clone()
             } else {
                 return Err(pyo3::exceptions::PyTypeError::new_err(
-                    "tm must be a tilemap bank index (int) or a Tilemap instance"
+                    "tm must be int or Tilemap"
                 ));
             };
-            let dst = &mut *self.rc().get();
+            let dst = &mut *self.rc().as_ptr();
             dst.draw_tilemap_3d(x, y, w, h, &src, pos, rot, fov, colkey);
         }
         Ok(())
@@ -2069,7 +2149,7 @@ impl PyImage {
 
     #[pyo3(signature = (x, y, s, col))]
     pub fn text(&self, x: f32, y: f32, s: &str, col: u8) {
-        unsafe { (&mut *self.rc().get()).draw_text(x, y, s, col, None); }
+        unsafe { (&mut *self.rc().as_ptr()).draw_text(x, y, s, col, None); }
     }
 }
 
@@ -2116,7 +2196,7 @@ impl PyImageList {
     }
 
     pub fn __setitem__(&self, idx: i64, val: pyo3::PyRef<PyImage>) -> PyResult<()> {
-        let images = pyxel_core::images();
+        let mut images = pyxel_core::images();
         let len = images.len() as i64;
         let i = if idx < 0 { idx + len } else { idx };
         if i < 0 || i >= len {
@@ -2130,12 +2210,12 @@ impl PyImageList {
         // silently clipped anything wider/taller than the bank's current
         // size (e.g. loading a >256px-wide tileset PNG into image bank 0
         // would truncate everything past x=256/y=256).
-        pyxel_core::images()[i as usize] = val.rc().clone();
+        images[i as usize] = val.rc().clone();
         Ok(())
     }
 
     pub fn __delitem__(&self, idx: pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<()> {
-        let images = pyxel_core::images();
+        let mut images = pyxel_core::images();
         let len = images.len() as i64;
         if let Ok(i) = idx.extract::<i64>() {
             let i = if i < 0 { i + len } else { i };
@@ -2184,7 +2264,7 @@ impl PyImageList {
     }
 
     pub fn insert(&self, idx: usize, image: pyo3::PyRef<PyImage>) {
-        let images = pyxel_core::images();
+        let mut images = pyxel_core::images();
         let idx = idx.min(images.len());
         images.insert(idx, image.rc().clone());
     }
@@ -2201,7 +2281,7 @@ impl PyImageList {
 
     #[pyo3(signature = (idx=None))]
     pub fn pop(&self, idx: Option<i64>) -> PyResult<PyImage> {
-        let images = pyxel_core::images();
+        let mut images = pyxel_core::images();
         let len = images.len() as i64;
         if len == 0 {
             return Err(pyo3::exceptions::PyIndexError::new_err("pop from empty images list"));
@@ -2227,29 +2307,31 @@ impl PyImageList {
 // Sound wrapper (sound_wrapper.rs)
 // ---------------------------------------------------------------------------
 
-// Same Bank/Owned split as ChannelRef/ToneRef — needed so that
-// PySoundList.pop() can return a detached, standalone Sound (no longer
-// tied to any bank position). The #[new] standalone constructor
-// (pyxel.Sound()) itself is a separate, not-yet-done item (upstream
-// documents it but it's still missing here) — this enum groundwork
-// just makes pop() implementable now; adding #[new] later is a small
-// follow-up once this exists.
-enum SoundRef {
-    Bank(usize),
-    Owned(pyxel_core::RcSound),
-}
-
+// Previously a Bank(usize)/Owned(RcSound) enum, split so that
+// PySoundList.pop() could return a detached, standalone Sound (no
+// longer tied to any bank position). The Bank(usize) lazy-index
+// variant was removed after it caused a real crash: capturing
+// `list(pyxel.sounds)`, mutating the bank (e.g. `.clear()`), then
+// using an old Bank(i) reference re-indexed into the now-different
+// bank and panicked out-of-bounds — a Rust panic crossing the
+// retro_run() FFI boundary aborts the whole process rather than
+// raising a catchable Python exception. Every construction site now
+// clones the Arc eagerly instead (matching upstream's own official
+// binding, which does the same at __getitem__ time), so a PySound
+// always holds an independent, already-resolved handle — no stale
+// index ever gets re-resolved. Arc::clone() is just an atomic
+// refcount bump, not a deep copy, so this is effectively free; the
+// old Bank(usize) variant didn't actually save that cost anyway,
+// since almost every method already calls rc() (which cloned in
+// both branches) at least once.
 #[pyclass(name = "Sound", unsendable)]
 pub struct PySound {
-    sound_ref: SoundRef,
+    sound: pyxel_core::RcSound,
 }
 
 impl PySound {
-    pub fn rc(&self) -> &pyxel_core::RcSound {
-        match &self.sound_ref {
-            SoundRef::Bank(i) => &pyxel_core::sounds()[*i],
-            SoundRef::Owned(rc) => rc,
-        }
+    pub fn rc(&self) -> pyxel_core::RcSound {
+        self.sound.clone()
     }
 }
 
@@ -2261,7 +2343,7 @@ impl PySound {
     // enum split already added in v0.14.0's Seq protocol work.
     #[new]
     pub fn new() -> Self {
-        PySound { sound_ref: SoundRef::Owned(pyxel_core::Sound::new()) }
+        PySound { sound: pyxel_core::Sound::new() }
     }
 
     #[getter]
@@ -2271,7 +2353,7 @@ impl PySound {
 
     #[setter(notes)]
     pub fn set_notes_list(&self, notes: Vec<pyxel_core::SoundNote>) {
-        unsafe { (&mut *self.rc().get()).notes = notes; }
+        { (&mut *self.rc().lock().unwrap_or_else(std::sync::PoisonError::into_inner)).notes = notes; }
     }
 
     #[getter]
@@ -2281,7 +2363,7 @@ impl PySound {
 
     #[setter(tones)]
     pub fn set_tones_list(&self, tones: Vec<pyxel_core::SoundTone>) {
-        unsafe { (&mut *self.rc().get()).tones = tones; }
+        { (&mut *self.rc().lock().unwrap_or_else(std::sync::PoisonError::into_inner)).tones = tones; }
     }
 
     #[getter]
@@ -2291,7 +2373,7 @@ impl PySound {
 
     #[setter(volumes)]
     pub fn set_volumes_list(&self, volumes: Vec<pyxel_core::SoundVolume>) {
-        unsafe { (&mut *self.rc().get()).volumes = volumes; }
+        { (&mut *self.rc().lock().unwrap_or_else(std::sync::PoisonError::into_inner)).volumes = volumes; }
     }
 
     #[getter]
@@ -2301,59 +2383,71 @@ impl PySound {
 
     #[setter(effects)]
     pub fn set_effects_list(&self, effects: Vec<pyxel_core::SoundEffect>) {
-        unsafe { (&mut *self.rc().get()).effects = effects; }
+        { (&mut *self.rc().lock().unwrap_or_else(std::sync::PoisonError::into_inner)).effects = effects; }
     }
 
     #[getter]
     pub fn speed(&self) -> pyxel_core::SoundSpeed {
-        unsafe { (&*self.rc().get()).speed }
+        (&*self.rc().lock().unwrap_or_else(std::sync::PoisonError::into_inner)).speed
     }
 
     #[setter]
-    pub fn set_speed(&self, speed: pyxel_core::SoundSpeed) {
-        unsafe { (&mut *self.rc().get()).speed = speed; }
+    pub fn set_speed(&self, speed: pyxel_core::SoundSpeed) -> PyResult<()> {
+        pyxel_core::Sound::validate_speed(speed).map_err(pyo3::exceptions::PyValueError::new_err)?;
+        { (&mut *self.rc().lock().unwrap_or_else(std::sync::PoisonError::into_inner)).speed = speed; }
+        Ok(())
     }
 
     pub fn set(&self, notes: &str, tones: &str, volumes: &str, effects: &str, speed: pyxel_core::SoundSpeed) -> PyResult<()> {
-        unsafe {
-            (&mut *self.rc().get())
+        // Explicit pre-check, matching upstream's own binding exactly:
+        // the underlying pyxel_core::Sound::set() already calls
+        // validate_speed() internally too, but that error would map to
+        // the generic PyException below (same as notes/tones/volumes/
+        // effects errors), not ValueError — upstream's own test suite
+        // expects speed=0 specifically to raise ValueError, so this
+        // needs its own explicit check ahead of the general call.
+        pyxel_core::Sound::validate_speed(speed).map_err(pyo3::exceptions::PyValueError::new_err)?;
+        {
+            (&mut *self.rc().lock().unwrap_or_else(std::sync::PoisonError::into_inner))
                 .set(notes, tones, volumes, effects, speed)
                 .map_err(pyo3::exceptions::PyException::new_err)
         }
     }
 
     pub fn set_notes(&self, notes: &str) -> PyResult<()> {
-        unsafe {
-            (&mut *self.rc().get()).set_notes(notes)
+        {
+            (&mut *self.rc().lock().unwrap_or_else(std::sync::PoisonError::into_inner)).set_notes(notes)
                 .map_err(pyo3::exceptions::PyException::new_err)
         }
     }
 
     pub fn set_tones(&self, tones: &str) -> PyResult<()> {
-        unsafe {
-            (&mut *self.rc().get()).set_tones(tones)
+        {
+            (&mut *self.rc().lock().unwrap_or_else(std::sync::PoisonError::into_inner)).set_tones(tones)
                 .map_err(pyo3::exceptions::PyException::new_err)
         }
     }
 
     pub fn set_volumes(&self, volumes: &str) -> PyResult<()> {
-        unsafe {
-            (&mut *self.rc().get()).set_volumes(volumes)
+        {
+            (&mut *self.rc().lock().unwrap_or_else(std::sync::PoisonError::into_inner)).set_volumes(volumes)
                 .map_err(pyo3::exceptions::PyException::new_err)
         }
     }
 
     pub fn set_effects(&self, effects: &str) -> PyResult<()> {
-        unsafe {
-            (&mut *self.rc().get()).set_effects(effects)
+        {
+            (&mut *self.rc().lock().unwrap_or_else(std::sync::PoisonError::into_inner)).set_effects(effects)
                 .map_err(pyo3::exceptions::PyException::new_err)
         }
     }
 
     #[pyo3(signature = (code=None))]
     pub fn mml(&self, code: Option<&str>) -> PyResult<()> {
-        unsafe {
-            let snd = &mut *self.rc().get();
+        {
+            let rc = self.rc();
+            let mut guard = rc.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let snd = &mut *guard;
             match code {
                 None => { snd.clear_mml(); Ok(()) }
                 Some(c) => {
@@ -2375,7 +2469,7 @@ impl PySound {
                                 Ok(()) => {
                                     warn_deprecated_once(
                                         "Sound.mml.old_syntax",
-                                        "the old MML syntax (use the current mml() syntax instead)"
+                                        "Old MML syntax is deprecated. Use new syntax instead."
                                     );
                                     Ok(())
                                 }
@@ -2391,17 +2485,19 @@ impl PySound {
     // Deprecated: old_mml (legacy MML dialect, predates the current
     // mml() syntax)
     pub fn old_mml(&self, code: &str) -> PyResult<()> {
-        warn_deprecated_once("Sound.old_mml", "Sound.old_mml() (use Sound.mml() instead)");
-        unsafe {
-            (&mut *self.rc().get()).old_mml(code)
+        warn_deprecated_once("Sound.old_mml", "Sound.old_mml(code) is deprecated. Use Sound.mml(code) instead.");
+        {
+            (&mut *self.rc().lock().unwrap_or_else(std::sync::PoisonError::into_inner)).old_mml(code)
                 .map_err(pyo3::exceptions::PyException::new_err)
         }
     }
 
     #[pyo3(signature = (filename=None))]
     pub fn pcm(&self, filename: Option<&str>) -> PyResult<()> {
-        unsafe {
-            let snd = &mut *self.rc().get();
+        {
+            let rc = self.rc();
+            let mut guard = rc.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let snd = &mut *guard;
             match filename {
                 None => { snd.clear_pcm(); Ok(()) }
                 Some(f) => snd.load_pcm(f).map_err(pyo3::exceptions::PyException::new_err)
@@ -2410,7 +2506,7 @@ impl PySound {
     }
 
     pub fn total_sec(&self) -> Option<f32> {
-        unsafe { (&*self.rc().get()).total_seconds() }
+        (&*self.rc().lock().unwrap_or_else(std::sync::PoisonError::into_inner)).total_seconds()
     }
 }
 
@@ -2433,7 +2529,7 @@ impl PySoundList {
                     String::from("list index out of range")
                 ));
             }
-            return Ok(PySound { sound_ref: SoundRef::Bank(i as usize) }.into_py(py));
+            return Ok(PySound { sound: pyxel_core::sounds()[i as usize].clone() }.into_py(py));
         }
         if let Ok(slice) = idx.downcast::<pyo3::types::PySlice>() {
             let indices = slice.indices(len)?;
@@ -2441,12 +2537,12 @@ impl PySoundList {
             let mut i = indices.start;
             if indices.step > 0 {
                 while i < indices.stop {
-                    result.push(PySound { sound_ref: SoundRef::Bank(i as usize) });
+                    result.push(PySound { sound: pyxel_core::sounds()[i as usize].clone() });
                     i += indices.step;
                 }
             } else if indices.step < 0 {
                 while i > indices.stop {
-                    result.push(PySound { sound_ref: SoundRef::Bank(i as usize) });
+                    result.push(PySound { sound: pyxel_core::sounds()[i as usize].clone() });
                     i += indices.step;
                 }
             }
@@ -2468,7 +2564,7 @@ impl PySoundList {
     }
 
     pub fn __delitem__(&self, idx: pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<()> {
-        let sounds = pyxel_core::sounds();
+        let mut sounds = pyxel_core::sounds();
         let len = sounds.len() as i64;
         if let Ok(i) = idx.extract::<i64>() {
             let i = if i < 0 { i + len } else { i };
@@ -2503,7 +2599,7 @@ impl PySoundList {
 
     pub fn __reversed__(&self) -> Vec<PySound> {
         pyxel_core::sounds().iter().rev()
-            .map(|rc| PySound { sound_ref: SoundRef::Owned(rc.clone()) })
+            .map(|rc| PySound { sound: rc.clone() })
             .collect()
     }
 
@@ -2512,7 +2608,7 @@ impl PySoundList {
     }
 
     pub fn insert(&self, idx: usize, sound: pyo3::PyRef<PySound>) {
-        let sounds = pyxel_core::sounds();
+        let mut sounds = pyxel_core::sounds();
         let idx = idx.min(sounds.len());
         sounds.insert(idx, sound.rc().clone());
     }
@@ -2529,7 +2625,7 @@ impl PySoundList {
 
     #[pyo3(signature = (idx=None))]
     pub fn pop(&self, idx: Option<i64>) -> PyResult<PySound> {
-        let sounds = pyxel_core::sounds();
+        let mut sounds = pyxel_core::sounds();
         let len = sounds.len() as i64;
         if len == 0 {
             return Err(pyo3::exceptions::PyIndexError::new_err("pop from empty sounds list"));
@@ -2539,7 +2635,7 @@ impl PySoundList {
         if i < 0 || i >= len {
             return Err(pyo3::exceptions::PyIndexError::new_err("pop index out of range"));
         }
-        Ok(PySound { sound_ref: SoundRef::Owned(sounds.remove(i as usize)) })
+        Ok(PySound { sound: sounds.remove(i as usize) })
     }
 
     pub fn clear(&self) {
@@ -2581,10 +2677,21 @@ impl PyTilemap {
             pyxel_core::ImageSource::Image(pyimg.rc().clone())
         } else {
             return Err(pyo3::exceptions::PyTypeError::new_err(
-                "img must be u32, Image"
+                "img must be int or Image"
             ));
         };
-        Ok(PyTilemap { tilemap: pyxel_core::Tilemap::new(width, height, imgsrc) })
+        // Uses try_new() (a Result), not new() — new() calls
+        // .expect("tilemap dimensions are too large") internally and
+        // panics on oversized dimensions instead of returning an
+        // error. A Rust panic raised from PyO3-called code crosses the
+        // retro_run() FFI boundary and aborts the whole process rather
+        // than raising a catchable Python exception. Matches upstream's
+        // own official binding (tilemap_wrapper.rs), which uses
+        // try_new() + map_err(PyValueError::new_err) for the same
+        // reason (see also PyImage::new() above).
+        pyxel_core::Tilemap::try_new(width, height, imgsrc)
+            .map(|tilemap| PyTilemap { tilemap })
+            .map_err(pyo3::exceptions::PyValueError::new_err)
     }
 
     #[staticmethod]
@@ -2606,12 +2713,12 @@ impl PyTilemap {
 
     #[getter]
     pub fn width(&self) -> u32 {
-        unsafe { (&*self.rc().get()).width() }
+        unsafe { (&*self.rc().as_ptr()).width() }
     }
 
     #[getter]
     pub fn height(&self) -> u32 {
-        unsafe { (&*self.rc().get()).height() }
+        unsafe { (&*self.rc().as_ptr()).height() }
     }
 
     // data_ptr() -> ctypes array of c_uint16
@@ -2625,7 +2732,7 @@ impl PyTilemap {
     // bulk tile access faster than pset()/pget() one at a time.
     pub fn data_ptr(&self, py: Python) -> PyResult<PyObject> {
         unsafe {
-            let tm = &mut *self.rc().get();
+            let tm = &mut *self.rc().as_ptr();
             let size = (tm.width() * tm.height() * 2) as usize;
             let ptr = tm.data_ptr() as usize;
             let ctypes = py.import_bound("ctypes")?;
@@ -2645,7 +2752,7 @@ impl PyTilemap {
     pub fn imgsrc(&self, py: pyo3::Python) -> pyo3::PyObject {
         use pyo3::IntoPy;
         unsafe {
-            match &(&*self.rc().get()).imgsrc {
+            match &(&*self.rc().as_ptr()).imgsrc {
                 pyxel_core::ImageSource::Index(i) => (*i).into_py(py),
                 pyxel_core::ImageSource::Image(rc) => {
                     pyo3::Py::new(py, PyImage { image: rc.clone() })
@@ -2665,10 +2772,10 @@ impl PyTilemap {
                 pyxel_core::ImageSource::Image(pyimg.rc().clone())
             } else {
                 return Err(pyo3::exceptions::PyTypeError::new_err(
-                    "imgsrc must be an image bank index (int) or an Image instance"
+                    "imgsrc must be int or Image"
                 ));
             };
-            (&mut *self.rc().get()).imgsrc = imgsrc;
+            (&mut *self.rc().as_ptr()).imgsrc = imgsrc;
         }
         Ok(())
     }
@@ -2679,13 +2786,13 @@ impl PyTilemap {
     // same reasoning as Tone.waveform/noise above.
     #[getter]
     pub fn refimg(&self, py: pyo3::Python) -> pyo3::PyObject {
-        warn_deprecated_once("Tilemap.refimg.get", "Tilemap.refimg (use Tilemap.imgsrc instead)");
+        warn_deprecated_once("Tilemap.refimg.get", "Tilemap.refimg is deprecated. Use Tilemap.imgsrc instead.");
         self.imgsrc(py)
     }
 
     #[setter]
     pub fn set_refimg(&self, img: pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<()> {
-        warn_deprecated_once("Tilemap.refimg.set", "Tilemap.refimg (use Tilemap.imgsrc instead)");
+        warn_deprecated_once("Tilemap.refimg.set", "Tilemap.refimg is deprecated. Use Tilemap.imgsrc instead.");
         self.set_imgsrc(img)
     }
 
@@ -2698,9 +2805,9 @@ impl PyTilemap {
     #[getter]
     pub fn image(&self, py: pyo3::Python) -> pyo3::PyObject {
         use pyo3::IntoPy;
-        warn_deprecated_once("Tilemap.image.get", "Tilemap.image (use Tilemap.imgsrc instead)");
+        warn_deprecated_once("Tilemap.image.get", "Tilemap.image is deprecated. Use Tilemap.imgsrc instead.");
         unsafe {
-            match &(&*self.rc().get()).imgsrc {
+            match &(&*self.rc().as_ptr()).imgsrc {
                 pyxel_core::ImageSource::Index(i) => {
                     let rc = pyxel_core::images()[*i as usize].clone();
                     pyo3::Py::new(py, PyImage { image: rc })
@@ -2718,7 +2825,7 @@ impl PyTilemap {
 
     #[setter]
     pub fn set_image(&self, img: pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<()> {
-        warn_deprecated_once("Tilemap.image.set", "Tilemap.image (use Tilemap.imgsrc instead)");
+        warn_deprecated_once("Tilemap.image.set", "Tilemap.image is deprecated. Use Tilemap.imgsrc instead.");
         self.set_imgsrc(img)
     }
 
@@ -2738,16 +2845,16 @@ impl PyTilemap {
             ))
         })?;
         unsafe {
-            let tm = &mut *self.rc().get();
+            let tm = &mut *self.rc().as_ptr();
             let refs: Vec<&str> = items.iter().map(String::as_str).collect();
-            tm.set(x, y, &refs);
+            tm.set(x, y, &refs).map_err(pyo3::exceptions::PyValueError::new_err)?;
         }
         Ok(())
     }
 
     pub fn load(&self, x: i32, y: i32, filename: &str, layer: u32) -> PyResult<()> {
         unsafe {
-            let tm = &mut *self.rc().get();
+            let tm = &mut *self.rc().as_ptr();
             tm.load(x, y, filename, layer)
                 .map_err(pyo3::exceptions::PyException::new_err)
         }
@@ -2756,7 +2863,7 @@ impl PyTilemap {
     #[pyo3(signature = (x=None, y=None, w=None, h=None))]
     pub fn clip(&self, x: Option<f32>, y: Option<f32>, w: Option<f32>, h: Option<f32>) -> PyResult<()> {
         unsafe {
-            let tm = &mut *self.rc().get();
+            let tm = &mut *self.rc().as_ptr();
             if let (Some(x), Some(y), Some(w), Some(h)) = (x, y, w, h) {
                 tm.set_clip_rect(x, y, w, h);
             } else {
@@ -2769,7 +2876,7 @@ impl PyTilemap {
     #[pyo3(signature = (x=None, y=None))]
     pub fn camera(&self, x: Option<f32>, y: Option<f32>) -> PyResult<()> {
         unsafe {
-            let tm = &mut *self.rc().get();
+            let tm = &mut *self.rc().as_ptr();
             if let (Some(x), Some(y)) = (x, y) {
                 tm.set_camera(x, y);
             } else {
@@ -2780,59 +2887,59 @@ impl PyTilemap {
     }
 
     pub fn cls(&self, tile: (u16, u16)) {
-        unsafe { (&mut *self.rc().get()).clear(tile); }
+        unsafe { (&mut *self.rc().as_ptr()).clear(tile); }
     }
 
     pub fn pget(&self, x: f32, y: f32) -> (u16, u16) {
-        unsafe { (&*self.rc().get()).tile(x, y) }
+        unsafe { (&*self.rc().as_ptr()).tile(x, y) }
     }
 
     pub fn pset(&self, x: f32, y: f32, tile: (u16, u16)) {
-        unsafe { (&mut *self.rc().get()).set_tile(x, y, tile); }
+        unsafe { (&mut *self.rc().as_ptr()).set_tile(x, y, tile); }
     }
 
     pub fn line(&self, x1: f32, y1: f32, x2: f32, y2: f32, tile: (u16, u16)) {
-        unsafe { (&mut *self.rc().get()).draw_line(x1, y1, x2, y2, tile); }
+        unsafe { (&mut *self.rc().as_ptr()).draw_line(x1, y1, x2, y2, tile); }
     }
 
     pub fn rect(&self, x: f32, y: f32, w: f32, h: f32, tile: (u16, u16)) {
-        unsafe { (&mut *self.rc().get()).draw_rect(x, y, w, h, tile); }
+        unsafe { (&mut *self.rc().as_ptr()).draw_rect(x, y, w, h, tile); }
     }
 
     pub fn rectb(&self, x: f32, y: f32, w: f32, h: f32, tile: (u16, u16)) {
-        unsafe { (&mut *self.rc().get()).draw_rect_border(x, y, w, h, tile); }
+        unsafe { (&mut *self.rc().as_ptr()).draw_rect_border(x, y, w, h, tile); }
     }
 
     pub fn circ(&self, x: f32, y: f32, r: f32, tile: (u16, u16)) {
-        unsafe { (&mut *self.rc().get()).draw_circle(x, y, r, tile); }
+        unsafe { (&mut *self.rc().as_ptr()).draw_circle(x, y, r, tile); }
     }
 
     pub fn circb(&self, x: f32, y: f32, r: f32, tile: (u16, u16)) {
-        unsafe { (&mut *self.rc().get()).draw_circle_border(x, y, r, tile); }
+        unsafe { (&mut *self.rc().as_ptr()).draw_circle_border(x, y, r, tile); }
     }
 
     pub fn elli(&self, x: f32, y: f32, w: f32, h: f32, tile: (u16, u16)) {
-        unsafe { (&mut *self.rc().get()).draw_ellipse(x, y, w, h, tile); }
+        unsafe { (&mut *self.rc().as_ptr()).draw_ellipse(x, y, w, h, tile); }
     }
 
     pub fn ellib(&self, x: f32, y: f32, w: f32, h: f32, tile: (u16, u16)) {
-        unsafe { (&mut *self.rc().get()).draw_ellipse_border(x, y, w, h, tile); }
+        unsafe { (&mut *self.rc().as_ptr()).draw_ellipse_border(x, y, w, h, tile); }
     }
 
     pub fn tri(&self, x1: f32, y1: f32, x2: f32, y2: f32, x3: f32, y3: f32, tile: (u16, u16)) {
-        unsafe { (&mut *self.rc().get()).draw_triangle(x1, y1, x2, y2, x3, y3, tile); }
+        unsafe { (&mut *self.rc().as_ptr()).draw_triangle(x1, y1, x2, y2, x3, y3, tile); }
     }
 
     pub fn trib(&self, x1: f32, y1: f32, x2: f32, y2: f32, x3: f32, y3: f32, tile: (u16, u16)) {
-        unsafe { (&mut *self.rc().get()).draw_triangle_border(x1, y1, x2, y2, x3, y3, tile); }
+        unsafe { (&mut *self.rc().as_ptr()).draw_triangle_border(x1, y1, x2, y2, x3, y3, tile); }
     }
 
     pub fn fill(&self, x: f32, y: f32, tile: (u16, u16)) {
-        unsafe { (&mut *self.rc().get()).flood_fill(x, y, tile); }
+        unsafe { (&mut *self.rc().as_ptr()).flood_fill(x, y, tile); }
     }
 
     pub fn collide(&self, x: f32, y: f32, w: f32, h: f32, dx: f32, dy: f32, walls: Vec<(u16, u16)>) -> (f32, f32) {
-        unsafe { (&*self.rc().get()).collide(x, y, w, h, dx, dy, &walls) }
+        unsafe { (&*self.rc().as_ptr()).collide(x, y, w, h, dx, dy, &walls) }
     }
 
     // tm can be a bank index (int) or a Tilemap instance — previously
@@ -2846,15 +2953,15 @@ impl PyTilemap {
             let src = if let Ok(idx) = tm.extract::<u32>() {
                 pyxel_core::tilemaps().get(idx as usize)
                     .cloned()
-                    .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("Invalid tilemap index"))?
+                    .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("tm must be a valid tilemap index"))?
             } else if let Ok(pytm) = tm.extract::<pyo3::PyRef<PyTilemap>>() {
                 pytm.rc().clone()
             } else {
                 return Err(pyo3::exceptions::PyTypeError::new_err(
-                    "tm must be a tilemap bank index (int) or a Tilemap instance"
+                    "tm must be int or Tilemap"
                 ));
             };
-            let dst = &mut *self.rc().get();
+            let dst = &mut *self.rc().as_ptr();
             dst.draw_tilemap(x, y, &src, u, v, w, h, tilekey, rotate, scale);
         }
         Ok(())
@@ -2919,7 +3026,7 @@ impl PyTilemapList {
     }
 
     pub fn __delitem__(&self, idx: pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<()> {
-        let tilemaps = pyxel_core::tilemaps();
+        let mut tilemaps = pyxel_core::tilemaps();
         let len = tilemaps.len() as i64;
         if let Ok(i) = idx.extract::<i64>() {
             let i = if i < 0 { i + len } else { i };
@@ -2963,7 +3070,7 @@ impl PyTilemapList {
     }
 
     pub fn insert(&self, idx: usize, tilemap: pyo3::PyRef<PyTilemap>) {
-        let tilemaps = pyxel_core::tilemaps();
+        let mut tilemaps = pyxel_core::tilemaps();
         let idx = idx.min(tilemaps.len());
         tilemaps.insert(idx, tilemap.rc().clone());
     }
@@ -2980,7 +3087,7 @@ impl PyTilemapList {
 
     #[pyo3(signature = (idx=None))]
     pub fn pop(&self, idx: Option<i64>) -> PyResult<PyTilemap> {
-        let tilemaps = pyxel_core::tilemaps();
+        let mut tilemaps = pyxel_core::tilemaps();
         let len = tilemaps.len() as i64;
         if len == 0 {
             return Err(pyo3::exceptions::PyIndexError::new_err("pop from empty tilemaps list"));
@@ -3022,7 +3129,7 @@ impl PyFont {
     }
 
     pub fn text_width(&self, s: &str) -> i32 {
-        unsafe { (&mut *self.inner.get()).text_width(s) }
+        unsafe { (&mut *self.inner.as_ptr()).text_width(s) }
     }
 }
 
@@ -3044,22 +3151,28 @@ impl PyFont {
 // instances was actually the same shared bank-0 storage, only the
 // LAST one's gain survived, silently discarding the others. Mirrors
 // ImageSource's Index(u32)/Image(RcImage) split in tilemap.rs.
-enum ChannelRef {
-    Bank(usize),
-    Owned(pyxel_core::RcChannel),
-}
-
+//
+// This used to be a Bank(usize)/Owned(RcChannel) enum, resolving a
+// bank index lazily on each rc() call. The Bank(usize) variant was
+// removed after it caused a real crash: capturing `list(pyxel.channels)`,
+// mutating the bank shape, then using an old Bank(i) reference
+// re-indexed into the now-different bank and panicked out-of-bounds —
+// a Rust panic crossing the retro_run() FFI boundary aborts the whole
+// process rather than raising a catchable Python exception. Every
+// construction site now clones the Arc eagerly instead (matching
+// upstream's own official binding, which does the same at
+// __getitem__ time), so a PyChannel always holds an independent,
+// already-resolved handle — no stale index ever gets re-resolved.
+// Arc::clone() is just an atomic refcount bump, not a deep copy, so
+// this is effectively free.
 #[pyclass(name = "Channel", unsendable)]
 pub struct PyChannel {
-    channel_ref: ChannelRef,
+    channel: pyxel_core::RcChannel,
 }
 
 impl PyChannel {
-    pub fn rc(&self) -> &pyxel_core::RcChannel {
-        match &self.channel_ref {
-            ChannelRef::Bank(i) => &pyxel_core::channels()[*i],
-            ChannelRef::Owned(rc) => rc,
-        }
+    pub fn rc(&self) -> pyxel_core::RcChannel {
+        self.channel.clone()
     }
 }
 
@@ -3067,27 +3180,27 @@ impl PyChannel {
 impl PyChannel {
     #[new]
     pub fn new() -> Self {
-        PyChannel { channel_ref: ChannelRef::Owned(pyxel_core::Channel::new()) }
+        PyChannel { channel: pyxel_core::Channel::new() }
     }
 
     #[getter]
     pub fn gain(&self) -> pyxel_core::ChannelGain {
-        unsafe { (&*self.rc().get()).gain }
+        (&*self.rc().lock().unwrap_or_else(std::sync::PoisonError::into_inner)).gain
     }
 
     #[setter]
     pub fn set_gain(&self, gain: pyxel_core::ChannelGain) {
-        unsafe { (&mut *self.rc().get()).gain = gain; }
+        { (&mut *self.rc().lock().unwrap_or_else(std::sync::PoisonError::into_inner)).gain = gain; }
     }
 
     #[getter]
     pub fn detune(&self) -> pyxel_core::ChannelDetune {
-        unsafe { (&*self.rc().get()).detune }
+        (&*self.rc().lock().unwrap_or_else(std::sync::PoisonError::into_inner)).detune
     }
 
     #[setter]
     pub fn set_detune(&self, detune: pyxel_core::ChannelDetune) {
-        unsafe { (&mut *self.rc().get()).detune = detune; }
+        { (&mut *self.rc().lock().unwrap_or_else(std::sync::PoisonError::into_inner)).detune = detune; }
     }
 
     // See the top-level play() function's comment for why snd needs to
@@ -3100,36 +3213,45 @@ impl PyChannel {
             let should_loop   = r#loop.unwrap_or(false);
             let should_resume = resume.unwrap_or(false);
             if tick.is_some() {
-                warn_deprecated_once("Channel.play.tick", "Channel.play()'s tick argument (use sec instead)");
+                warn_deprecated_once("Channel.play.tick", "tick option of Channel.play is deprecated. Use sec option instead.");
             }
             let sec = tick.map(|t| t / 120.0).or(sec);
-            let channel = &mut *self.rc().get();
+            let rc = self.rc();
+            let mut guard = rc.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let channel = &mut *guard;
             if let Ok(idx) = snd.extract::<u32>() {
                 let sound = pyxel_core::sounds().get(idx as usize)
                     .cloned()
-                    .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("Invalid sound index"))?;
-                channel.play_sound(sound, sec, should_loop, should_resume);
+                    .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("snd must be a valid sound index"))?;
+                channel.play_sound(sound, sec, should_loop, should_resume)
+                    .map_err(pyo3::exceptions::PyValueError::new_err)?;
             } else if let Ok(seq) = snd.extract::<Vec<u32>>() {
                 let pyxel_sounds = pyxel_core::sounds();
                 let mut sounds = Vec::with_capacity(seq.len());
                 for idx in seq {
                     sounds.push(
                         pyxel_sounds.get(idx as usize).cloned()
-                            .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("Invalid sound index"))?
+                            .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("snd must contain only valid sound indices"))?
                     );
                 }
-                channel.play(sounds, sec, should_loop, should_resume);
-            } else if let Ok(mml) = snd.extract::<String>() {
-                channel.play_mml(&mml, sec, should_loop, should_resume)
+                channel.play(sounds, sec, should_loop, should_resume)
                     .map_err(pyo3::exceptions::PyValueError::new_err)?;
+            } else if let Ok(mml) = snd.extract::<String>() {
+                // Same reasoning as the top-level play() fix above:
+                // MML syntax errors map to the generic Exception, not
+                // ValueError, matching upstream's own binding.
+                channel.play_mml(&mml, sec, should_loop, should_resume)
+                    .map_err(pyo3::exceptions::PyException::new_err)?;
             } else if let Ok(snd_ref) = snd.extract::<pyo3::PyRef<PySound>>() {
-                channel.play(vec![snd_ref.rc().clone()], sec, should_loop, should_resume);
+                channel.play(vec![snd_ref.rc().clone()], sec, should_loop, should_resume)
+                    .map_err(pyo3::exceptions::PyValueError::new_err)?;
             } else if let Ok(snd_refs) = snd.extract::<Vec<pyo3::PyRef<PySound>>>() {
                 let sounds: Vec<_> = snd_refs.iter().map(|s| s.rc().clone()).collect();
-                channel.play(sounds, sec, should_loop, should_resume);
+                channel.play(sounds, sec, should_loop, should_resume)
+                    .map_err(pyo3::exceptions::PyValueError::new_err)?;
             } else {
                 return Err(pyo3::exceptions::PyTypeError::new_err(
-                    "snd must be u32, Vec<u32>, Sound, list of Sound, or MML str"
+                    "snd must be int, list[int], Sound, list[Sound], or str"
                 ));
             }
         }
@@ -3139,7 +3261,7 @@ impl PyChannel {
     pub fn stop(&self) {
         unsafe {
             if PYXEL_READY {
-                (&mut *self.rc().get()).stop();
+                (&mut *self.rc().lock().unwrap_or_else(std::sync::PoisonError::into_inner)).stop();
             }
         }
     }
@@ -3147,7 +3269,7 @@ impl PyChannel {
     pub fn play_pos(&self) -> Option<(u32, f32)> {
         unsafe {
             if !PYXEL_READY { return None; }
-            (&mut *self.rc().get()).play_position()
+            (&mut *self.rc().lock().unwrap_or_else(std::sync::PoisonError::into_inner)).play_position()
         }
     }
 }
@@ -3206,7 +3328,7 @@ impl PyColors {
         if let Ok(idx_i64) = idx.extract::<i64>() {
             // Single index assignment: colors[i] = 0xRRGGBB
             let v = val.extract::<u32>()?;
-            let colors = pyxel_core::colors();
+            let mut colors = pyxel_core::colors();
             let len = colors.len() as i64;
             let i = if idx_i64 < 0 { idx_i64 + len } else { idx_i64 };
             if i < 0 || i >= len {
@@ -3227,7 +3349,7 @@ impl PyColors {
             // range inserts rather than replaces — confirmed via
             // upstream's own
             // test_reversed_step_one_slice_assignment_inserts).
-            let colors_ref = pyxel_core::colors();
+            let mut colors_ref = pyxel_core::colors();
             let len = colors_ref.len() as i64;
             let indices = slice.indices(len)?;
             if indices.step != 1 {
@@ -3254,13 +3376,13 @@ impl PyColors {
     }
 
     pub fn insert(&self, idx: usize, val: u32) {
-        let colors = pyxel_core::colors();
+        let mut colors = pyxel_core::colors();
         let idx = idx.min(colors.len());
         colors.insert(idx, val);
     }
 
     pub fn __delitem__(&self, idx: pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<()> {
-        let colors = pyxel_core::colors();
+        let mut colors = pyxel_core::colors();
         let len = colors.len() as i64;
         if let Ok(i) = idx.extract::<i64>() {
             let i = if i < 0 { i + len } else { i };
@@ -3330,7 +3452,7 @@ impl PyColors {
 
     #[pyo3(signature = (idx=None))]
     pub fn pop(&self, idx: Option<i64>) -> PyResult<u32> {
-        let colors = pyxel_core::colors();
+        let mut colors = pyxel_core::colors();
         let len = colors.len() as i64;
         if len == 0 {
             return Err(pyo3::exceptions::PyIndexError::new_err("pop from empty colors list"));
@@ -3384,7 +3506,7 @@ impl PyChannelList {
                     String::from("list index out of range")
                 ));
             }
-            return Ok(PyChannel { channel_ref: ChannelRef::Bank(i as usize) }.into_py(py));
+            return Ok(PyChannel { channel: pyxel_core::channels()[i as usize].clone() }.into_py(py));
         }
         if let Ok(slice) = idx.downcast::<pyo3::types::PySlice>() {
             let indices = slice.indices(len)?;
@@ -3392,12 +3514,12 @@ impl PyChannelList {
             let mut i = indices.start;
             if indices.step > 0 {
                 while i < indices.stop {
-                    result.push(PyChannel { channel_ref: ChannelRef::Bank(i as usize) });
+                    result.push(PyChannel { channel: pyxel_core::channels()[i as usize].clone() });
                     i += indices.step;
                 }
             } else if indices.step < 0 {
                 while i > indices.stop {
-                    result.push(PyChannel { channel_ref: ChannelRef::Bank(i as usize) });
+                    result.push(PyChannel { channel: pyxel_core::channels()[i as usize].clone() });
                     i += indices.step;
                 }
             }
@@ -3416,9 +3538,13 @@ impl PyChannelList {
             }
             let i = i as usize;
             let ch = val.extract::<pyo3::PyRef<PyChannel>>()?;
-            unsafe {
-                let src = &*ch.rc().get();
-                let dst = &mut *pyxel_core::channels()[i].get();
+            {
+                let src_rc = ch.rc();
+                let src_guard = src_rc.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                let src = &*src_guard;
+                let dst_rc = pyxel_core::channels()[i].clone();
+                let mut dst_guard = dst_rc.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                let dst = &mut *dst_guard;
                 dst.gain   = src.gain;
                 dst.detune = src.detune;
             }
@@ -3450,9 +3576,12 @@ impl PyChannelList {
             let mut fresh_channels = Vec::with_capacity(items.len());
             for ch in &items {
                 let fresh = pyxel_core::Channel::new();
-                unsafe {
-                    let src = &*ch.rc().get();
-                    let dst = &mut *fresh.get();
+                {
+                    let src_rc = ch.rc();
+                    let src_guard = src_rc.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                    let src = &*src_guard;
+                    let mut dst_guard = fresh.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                    let dst = &mut *dst_guard;
                     dst.gain   = src.gain;
                     dst.detune = src.detune;
                 }
@@ -3468,7 +3597,7 @@ impl PyChannelList {
     }
 
     pub fn __delitem__(&self, idx: pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<()> {
-        let channels = pyxel_core::channels();
+        let mut channels = pyxel_core::channels();
         let len = channels.len() as i64;
         if let Ok(i) = idx.extract::<i64>() {
             let i = if i < 0 { i + len } else { i };
@@ -3503,7 +3632,7 @@ impl PyChannelList {
 
     pub fn __reversed__(&self) -> Vec<PyChannel> {
         (0..pyxel_core::channels().len()).rev()
-            .map(|i| PyChannel { channel_ref: ChannelRef::Bank(i) })
+            .map(|i| PyChannel { channel: pyxel_core::channels()[i].clone() })
             .collect()
     }
 
@@ -3515,9 +3644,12 @@ impl PyChannelList {
     pub fn append(&self, channel: Option<pyo3::PyRef<PyChannel>>) {
         let fresh = pyxel_core::Channel::new();
         if let Some(ch) = channel {
-            unsafe {
-                let src = &*ch.rc().get();
-                let dst = &mut *fresh.get();
+            {
+                let src_rc = ch.rc();
+                let src_guard = src_rc.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                let src = &*src_guard;
+                let mut dst_guard = fresh.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                let dst = &mut *dst_guard;
                 dst.gain   = src.gain;
                 dst.detune = src.detune;
             }
@@ -3529,14 +3661,17 @@ impl PyChannelList {
     pub fn insert(&self, idx: usize, channel: Option<pyo3::PyRef<PyChannel>>) {
         let fresh = pyxel_core::Channel::new();
         if let Some(ch) = channel {
-            unsafe {
-                let src = &*ch.rc().get();
-                let dst = &mut *fresh.get();
+            {
+                let src_rc = ch.rc();
+                let src_guard = src_rc.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                let src = &*src_guard;
+                let mut dst_guard = fresh.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                let dst = &mut *dst_guard;
                 dst.gain   = src.gain;
                 dst.detune = src.detune;
             }
         }
-        let channels = pyxel_core::channels();
+        let mut channels = pyxel_core::channels();
         let idx = idx.min(channels.len());
         channels.insert(idx, fresh);
     }
@@ -3544,9 +3679,12 @@ impl PyChannelList {
     pub fn extend(&self, items: Vec<pyo3::PyRef<PyChannel>>) {
         for ch in &items {
             let fresh = pyxel_core::Channel::new();
-            unsafe {
-                let src = &*ch.rc().get();
-                let dst = &mut *fresh.get();
+            {
+                let src_rc = ch.rc();
+                let src_guard = src_rc.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                let src = &*src_guard;
+                let mut dst_guard = fresh.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                let dst = &mut *dst_guard;
                 dst.gain   = src.gain;
                 dst.detune = src.detune;
             }
@@ -3565,7 +3703,7 @@ impl PyChannelList {
     // returned item from the list.
     #[pyo3(signature = (idx=None))]
     pub fn pop(&self, idx: Option<i64>) -> PyResult<PyChannel> {
-        let channels = pyxel_core::channels();
+        let mut channels = pyxel_core::channels();
         let len = channels.len() as i64;
         if len == 0 {
             return Err(pyo3::exceptions::PyIndexError::new_err("pop from empty channels list"));
@@ -3576,7 +3714,7 @@ impl PyChannelList {
             return Err(pyo3::exceptions::PyIndexError::new_err("pop index out of range"));
         }
         let removed = channels.remove(i as usize);
-        Ok(PyChannel { channel_ref: ChannelRef::Owned(removed) })
+        Ok(PyChannel { channel: removed })
     }
 
     pub fn clear(&self) {
@@ -3593,9 +3731,13 @@ impl PyChannelList {
     pub fn from_list(&self, items: Vec<pyo3::PyRef<PyChannel>>) {
         for (i, ch) in items.iter().enumerate() {
             if i >= pyxel_core::channels().len() { break; }
-            unsafe {
-                let src = &*ch.rc().get();
-                let dst = &mut *pyxel_core::channels()[i].get();
+            {
+                let src_rc = ch.rc();
+                let src_guard = src_rc.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                let src = &*src_guard;
+                let dst_rc = pyxel_core::channels()[i].clone();
+                let mut dst_guard = dst_rc.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                let dst = &mut *dst_guard;
                 dst.gain   = src.gain;
                 dst.detune = src.detune;
             }
@@ -3604,7 +3746,7 @@ impl PyChannelList {
 
     pub fn to_list(&self) -> Vec<PyChannel> {
         (0..pyxel_core::channels().len())
-            .map(|i| PyChannel { channel_ref: ChannelRef::Bank(i) })
+            .map(|i| PyChannel { channel: pyxel_core::channels()[i].clone() })
             .collect()
     }
 }
@@ -3617,22 +3759,24 @@ impl PyChannelList {
 // is documented upstream as "Create a new Tone instance" (a genuinely
 // independent object), but previously always hardcoded bank 0 — every
 // px.Tone() was secretly a view onto the same shared bank-0 tone.
-enum ToneRef {
-    Bank(usize),
-    Owned(pyxel_core::RcTone),
-}
-
+//
+// Also carried the same Bank(usize)/Owned(RcTone) split as
+// SoundRef/ChannelRef, removed for the same reason: a lazily-resolved
+// Bank(i) reference re-indexed into a possibly-changed bank later
+// (e.g. after `pyxel.tones.clear()`) and could panic out-of-bounds —
+// a Rust panic crossing the retro_run() FFI boundary aborts the whole
+// process rather than raising a catchable Python exception. Every
+// construction site now clones the Arc eagerly instead (matching
+// upstream's own official binding), so a PyTone always holds an
+// independent, already-resolved handle.
 #[pyclass(name = "Tone", unsendable)]
 pub struct PyTone {
-    tone_ref: ToneRef,
+    tone: pyxel_core::RcTone,
 }
 
 impl PyTone {
-    pub fn rc(&self) -> &pyxel_core::RcTone {
-        match &self.tone_ref {
-            ToneRef::Bank(i) => &pyxel_core::tones()[*i],
-            ToneRef::Owned(rc) => rc,
-        }
+    pub fn rc(&self) -> pyxel_core::RcTone {
+        self.tone.clone()
     }
 }
 
@@ -3640,37 +3784,48 @@ impl PyTone {
 impl PyTone {
     #[new]
     pub fn new() -> Self {
-        PyTone { tone_ref: ToneRef::Owned(pyxel_core::Tone::new()) }
+        PyTone { tone: pyxel_core::Tone::new() }
     }
 
     #[getter]
     pub fn mode(&self) -> u32 {
-        unsafe { (&*self.rc().get()).mode.into() }
+        (&*self.rc().lock().unwrap_or_else(std::sync::PoisonError::into_inner)).mode.into()
     }
 
     #[setter]
     pub fn set_mode(&self, mode: u32) {
-        unsafe { (&mut *self.rc().get()).mode = pyxel_core::ToneMode::from(mode); }
+        { (&mut *self.rc().lock().unwrap_or_else(std::sync::PoisonError::into_inner)).mode = pyxel_core::ToneMode::from(mode); }
     }
 
     #[getter]
     pub fn sample_bits(&self) -> u32 {
-        unsafe { (&*self.rc().get()).sample_bits }
+        (&*self.rc().lock().unwrap_or_else(std::sync::PoisonError::into_inner)).sample_bits
     }
 
     #[setter]
-    pub fn set_sample_bits(&self, sample_bits: u32) {
-        unsafe { (&mut *self.rc().get()).sample_bits = sample_bits; }
+    pub fn set_sample_bits(&self, sample_bits: u32) -> PyResult<()> {
+        // pyxel-core itself has no validate_sample_bits (unlike
+        // Sound::validate_speed) — this range check only exists in
+        // upstream's own binding layer (tone_wrapper.rs), so it has to
+        // be replicated here rather than delegated to pyxel-core.
+        if !(1..=pyxel_core::AUDIO_SAMPLE_BITS).contains(&sample_bits) {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "sample_bits must be between 1 and {}",
+                pyxel_core::AUDIO_SAMPLE_BITS
+            )));
+        }
+        { (&mut *self.rc().lock().unwrap_or_else(std::sync::PoisonError::into_inner)).sample_bits = sample_bits; }
+        Ok(())
     }
 
     #[getter]
     pub fn gain(&self) -> pyxel_core::ToneGain {
-        unsafe { (&*self.rc().get()).gain }
+        (&*self.rc().lock().unwrap_or_else(std::sync::PoisonError::into_inner)).gain
     }
 
     #[setter]
     pub fn set_gain(&self, gain: pyxel_core::ToneGain) {
-        unsafe { (&mut *self.rc().get()).gain = gain; }
+        { (&mut *self.rc().lock().unwrap_or_else(std::sync::PoisonError::into_inner)).gain = gain; }
     }
 
     #[getter]
@@ -3680,7 +3835,7 @@ impl PyTone {
 
     #[setter]
     pub fn set_wavetable(&self, wavetable: Vec<pyxel_core::ToneSample>) {
-        unsafe { (&mut *self.rc().get()).wavetable = wavetable; }
+        { (&mut *self.rc().lock().unwrap_or_else(std::sync::PoisonError::into_inner)).wavetable = wavetable; }
     }
 
     // Deprecated: waveform (alias for wavetable). getter/setter use
@@ -3690,13 +3845,13 @@ impl PyTone {
     // warning) made the second one silently stop firing.
     #[getter]
     pub fn waveform(&self) -> PyToneWavetable {
-        warn_deprecated_once("Tone.waveform.get", "Tone.waveform (use Tone.wavetable instead)");
+        warn_deprecated_once("Tone.waveform.get", "Tone.waveform is deprecated. Use Tone.wavetable instead.");
         self.wavetable()
     }
 
     #[setter]
     pub fn set_waveform(&self, waveform: Vec<pyxel_core::ToneSample>) {
-        warn_deprecated_once("Tone.waveform.set", "Tone.waveform (use Tone.wavetable instead)");
+        warn_deprecated_once("Tone.waveform.set", "Tone.waveform is deprecated. Use Tone.wavetable instead.");
         self.set_wavetable(waveform);
     }
 
@@ -3704,13 +3859,13 @@ impl PyTone {
     // as waveform above.
     #[getter]
     pub fn noise(&self) -> u32 {
-        warn_deprecated_once("Tone.noise.get", "Tone.noise (use Tone.mode instead)");
+        warn_deprecated_once("Tone.noise.get", "Tone.noise is deprecated. Use Tone.mode instead.");
         self.mode()
     }
 
     #[setter]
     pub fn set_noise(&self, mode: u32) {
-        warn_deprecated_once("Tone.noise.set", "Tone.noise (use Tone.mode instead)");
+        warn_deprecated_once("Tone.noise.set", "Tone.noise is deprecated. Use Tone.mode instead.");
         self.set_mode(mode);
     }
 }
@@ -3723,9 +3878,12 @@ pub struct PyToneList;
 // against the pyclass's own call signature).
 impl PyToneList {
     fn copy_tone_into(src: &pyo3::PyRef<PyTone>, fresh: &pyxel_core::RcTone) {
-        unsafe {
-            let src = &*src.rc().get();
-            let dst = &mut *fresh.get();
+        {
+            let src_rc = src.rc();
+            let src_guard = src_rc.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let src = &*src_guard;
+            let mut dst_guard = fresh.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let dst = &mut *dst_guard;
             dst.mode        = src.mode;
             dst.sample_bits = src.sample_bits;
             dst.gain        = src.gain;
@@ -3750,7 +3908,7 @@ impl PyToneList {
                     String::from("list index out of range")
                 ));
             }
-            return Ok(PyTone { tone_ref: ToneRef::Bank(i as usize) }.into_py(py));
+            return Ok(PyTone { tone: pyxel_core::tones()[i as usize].clone() }.into_py(py));
         }
         if let Ok(slice) = idx.downcast::<pyo3::types::PySlice>() {
             let indices = slice.indices(len)?;
@@ -3758,12 +3916,12 @@ impl PyToneList {
             let mut i = indices.start;
             if indices.step > 0 {
                 while i < indices.stop {
-                    result.push(PyTone { tone_ref: ToneRef::Bank(i as usize) });
+                    result.push(PyTone { tone: pyxel_core::tones()[i as usize].clone() });
                     i += indices.step;
                 }
             } else if indices.step < 0 {
                 while i > indices.stop {
-                    result.push(PyTone { tone_ref: ToneRef::Bank(i as usize) });
+                    result.push(PyTone { tone: pyxel_core::tones()[i as usize].clone() });
                     i += indices.step;
                 }
             }
@@ -3781,9 +3939,13 @@ impl PyToneList {
             }
             let i = i as usize;
             let tone = val.extract::<pyo3::PyRef<PyTone>>()?;
-            unsafe {
-                let src = &*tone.rc().get();
-                let dst = &mut *pyxel_core::tones()[i].get();
+            {
+                let src_rc = tone.rc();
+                let src_guard = src_rc.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                let src = &*src_guard;
+                let dst_rc = pyxel_core::tones()[i].clone();
+                let mut dst_guard = dst_rc.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                let dst = &mut *dst_guard;
                 dst.mode        = src.mode;
                 dst.sample_bits = src.sample_bits;
                 dst.gain        = src.gain;
@@ -3823,7 +3985,7 @@ impl PyToneList {
     }
 
     pub fn __delitem__(&self, idx: pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<()> {
-        let tones = pyxel_core::tones();
+        let mut tones = pyxel_core::tones();
         let len = tones.len() as i64;
         if let Ok(i) = idx.extract::<i64>() {
             let i = if i < 0 { i + len } else { i };
@@ -3858,7 +4020,7 @@ impl PyToneList {
 
     pub fn __reversed__(&self) -> Vec<PyTone> {
         (0..pyxel_core::tones().len()).rev()
-            .map(|i| PyTone { tone_ref: ToneRef::Bank(i) })
+            .map(|i| PyTone { tone: pyxel_core::tones()[i].clone() })
             .collect()
     }
 
@@ -3873,7 +4035,7 @@ impl PyToneList {
     pub fn insert(&self, idx: usize, tone: Option<pyo3::PyRef<PyTone>>) {
         let fresh = pyxel_core::Tone::new();
         if let Some(t) = &tone { Self::copy_tone_into(t, &fresh); }
-        let tones = pyxel_core::tones();
+        let mut tones = pyxel_core::tones();
         let idx = idx.min(tones.len());
         tones.insert(idx, fresh);
     }
@@ -3892,7 +4054,7 @@ impl PyToneList {
 
     #[pyo3(signature = (idx=None))]
     pub fn pop(&self, idx: Option<i64>) -> PyResult<PyTone> {
-        let tones = pyxel_core::tones();
+        let mut tones = pyxel_core::tones();
         let len = tones.len() as i64;
         if len == 0 {
             return Err(pyo3::exceptions::PyIndexError::new_err("pop from empty tones list"));
@@ -3903,7 +4065,7 @@ impl PyToneList {
             return Err(pyo3::exceptions::PyIndexError::new_err("pop index out of range"));
         }
         let removed = tones.remove(i as usize);
-        Ok(PyTone { tone_ref: ToneRef::Owned(removed) })
+        Ok(PyTone { tone: removed })
     }
 
     pub fn clear(&self) {
@@ -3936,12 +4098,13 @@ pub struct PyMusicSeq {
 #[pymethods]
 impl PyMusicSeq {
     pub fn __len__(&self) -> usize {
-        unsafe { (&*self.parent.get()).seqs[self.channel].len() }
+        (&*self.parent.lock().unwrap_or_else(std::sync::PoisonError::into_inner)).seqs[self.channel].len()
     }
 
     pub fn __getitem__(&self, idx: i64) -> PyResult<u32> {
-        unsafe {
-            let v = &(&*self.parent.get()).seqs[self.channel];
+        {
+            let guard = self.parent.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let v = &guard.seqs[self.channel];
             let len = v.len() as i64;
             let i = if idx < 0 { idx + len } else { idx };
             if i < 0 || i >= len {
@@ -3952,8 +4115,9 @@ impl PyMusicSeq {
     }
 
     pub fn __setitem__(&self, idx: i64, val: u32) -> PyResult<()> {
-        unsafe {
-            let v = &mut (&mut *self.parent.get()).seqs[self.channel];
+        {
+            let mut guard = self.parent.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let v = &mut guard.seqs[self.channel];
             let len = v.len() as i64;
             let i = if idx < 0 { idx + len } else { idx };
             if i < 0 || i >= len {
@@ -3965,8 +4129,9 @@ impl PyMusicSeq {
     }
 
     pub fn __delitem__(&self, idx: i64) -> PyResult<()> {
-        unsafe {
-            let v = &mut (&mut *self.parent.get()).seqs[self.channel];
+        {
+            let mut guard = self.parent.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let v = &mut guard.seqs[self.channel];
             let len = v.len() as i64;
             let i = if idx < 0 { idx + len } else { idx };
             if i < 0 || i >= len {
@@ -3978,12 +4143,13 @@ impl PyMusicSeq {
     }
 
     pub fn append(&self, val: u32) {
-        unsafe { (&mut *self.parent.get()).seqs[self.channel].push(val); }
+        { self.parent.lock().unwrap_or_else(std::sync::PoisonError::into_inner).seqs[self.channel].push(val); }
     }
 
     pub fn insert(&self, idx: usize, val: u32) {
-        unsafe {
-            let v = &mut (&mut *self.parent.get()).seqs[self.channel];
+        {
+            let mut guard = self.parent.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let v = &mut guard.seqs[self.channel];
             let idx = idx.min(v.len());
             v.insert(idx, val);
         }
@@ -3991,8 +4157,9 @@ impl PyMusicSeq {
 
     #[pyo3(signature = (idx=None))]
     pub fn pop(&self, idx: Option<i64>) -> PyResult<u32> {
-        unsafe {
-            let v = &mut (&mut *self.parent.get()).seqs[self.channel];
+        {
+            let mut guard = self.parent.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let v = &mut guard.seqs[self.channel];
             let len = v.len() as i64;
             if len == 0 {
                 return Err(pyo3::exceptions::PyIndexError::new_err("pop from empty list"));
@@ -4007,35 +4174,35 @@ impl PyMusicSeq {
     }
 
     pub fn extend(&self, vals: Vec<u32>) {
-        unsafe { (&mut *self.parent.get()).seqs[self.channel].extend(vals); }
+        { (&mut *self.parent.lock().unwrap_or_else(std::sync::PoisonError::into_inner)).seqs[self.channel].extend(vals); }
     }
 
     pub fn clear(&self) {
-        unsafe { (&mut *self.parent.get()).seqs[self.channel].clear(); }
+        { (&mut *self.parent.lock().unwrap_or_else(std::sync::PoisonError::into_inner)).seqs[self.channel].clear(); }
     }
 
     pub fn __repr__(&self) -> String {
-        unsafe { format!("{:?}", (&*self.parent.get()).seqs[self.channel]) }
+        format!("{:?}", (&*self.parent.lock().unwrap_or_else(std::sync::PoisonError::into_inner)).seqs[self.channel])
     }
 
     pub fn __bool__(&self) -> bool {
-        unsafe { !(&*self.parent.get()).seqs[self.channel].is_empty() }
+        !(&*self.parent.lock().unwrap_or_else(std::sync::PoisonError::into_inner)).seqs[self.channel].is_empty()
     }
 
     pub fn __reversed__(&self) -> Vec<u32> {
-        unsafe { (&*self.parent.get()).seqs[self.channel].iter().rev().copied().collect() }
+        (&*self.parent.lock().unwrap_or_else(std::sync::PoisonError::into_inner)).seqs[self.channel].iter().rev().copied().collect()
     }
 
     pub fn __iadd__(&self, vals: Vec<u32>) {
-        unsafe { (&mut *self.parent.get()).seqs[self.channel].extend(vals); }
+        { (&mut *self.parent.lock().unwrap_or_else(std::sync::PoisonError::into_inner)).seqs[self.channel].extend(vals); }
     }
 
     pub fn __eq__(&self, other: Vec<u32>) -> bool {
-        unsafe { (&*self.parent.get()).seqs[self.channel] == other }
+        (&*self.parent.lock().unwrap_or_else(std::sync::PoisonError::into_inner)).seqs[self.channel] == other
     }
 
     pub fn to_list(&self) -> Vec<u32> {
-        unsafe { (&*self.parent.get()).seqs[self.channel].clone() }
+        (&*self.parent.lock().unwrap_or_else(std::sync::PoisonError::into_inner)).seqs[self.channel].clone()
     }
 }
 
@@ -4048,7 +4215,7 @@ pub struct PyMusicSeqs {
 #[pymethods]
 impl PyMusicSeqs {
     pub fn __len__(&self) -> usize {
-        unsafe { (&*self.parent.get()).seqs.len() }
+        (&*self.parent.lock().unwrap_or_else(std::sync::PoisonError::into_inner)).seqs.len()
     }
 
     // int -> a live PyMusicSeq view; slice -> a plain nested list
@@ -4057,8 +4224,8 @@ impl PyMusicSeqs {
     // slice).
     pub fn __getitem__(&self, py: pyo3::Python, idx: pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<pyo3::PyObject> {
         use pyo3::IntoPy;
-        unsafe {
-            let len = (&*self.parent.get()).seqs.len();
+        {
+            let len = (&*self.parent.lock().unwrap_or_else(std::sync::PoisonError::into_inner)).seqs.len();
             if let Ok(i) = idx.extract::<i64>() {
                 let l = len as i64;
                 let i = if i < 0 { i + l } else { i };
@@ -4073,12 +4240,12 @@ impl PyMusicSeqs {
                 let mut i = indices.start;
                 if indices.step > 0 {
                     while i < indices.stop {
-                        result.push((&*self.parent.get()).seqs[i as usize].clone());
+                        result.push((&*self.parent.lock().unwrap_or_else(std::sync::PoisonError::into_inner)).seqs[i as usize].clone());
                         i += indices.step;
                     }
                 } else if indices.step < 0 {
                     while i > indices.stop {
-                        result.push((&*self.parent.get()).seqs[i as usize].clone());
+                        result.push((&*self.parent.lock().unwrap_or_else(std::sync::PoisonError::into_inner)).seqs[i as usize].clone());
                         i += indices.step;
                     }
                 }
@@ -4093,8 +4260,9 @@ impl PyMusicSeqs {
     // slice-assignment semantics (e.g. seqs[2:0] = [[7]] inserts a new
     // channel at position 2, since slice 2:0 is an empty range).
     pub fn __setitem__(&self, idx: pyo3::Bound<'_, pyo3::PyAny>, val: pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<()> {
-        unsafe {
-            let music = &mut *self.parent.get();
+        {
+            let mut guard = self.parent.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let music = &mut *guard;
             if let Ok(i) = idx.extract::<i64>() {
                 let len = music.seqs.len() as i64;
                 let i = if i < 0 { i + len } else { i };
@@ -4124,8 +4292,9 @@ impl PyMusicSeqs {
     }
 
     pub fn __delitem__(&self, idx: pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<()> {
-        unsafe {
-            let music = &mut *self.parent.get();
+        {
+            let mut guard = self.parent.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let music = &mut *guard;
             let len = music.seqs.len() as i64;
             if let Ok(i) = idx.extract::<i64>() {
                 let i = if i < 0 { i + len } else { i };
@@ -4152,12 +4321,13 @@ impl PyMusicSeqs {
     }
 
     pub fn append(&self, val: Vec<u32>) {
-        unsafe { (&mut *self.parent.get()).seqs.push(val); }
+        { (&mut *self.parent.lock().unwrap_or_else(std::sync::PoisonError::into_inner)).seqs.push(val); }
     }
 
     pub fn insert(&self, idx: usize, val: Vec<u32>) {
-        unsafe {
-            let seqs = &mut (&mut *self.parent.get()).seqs;
+        {
+            let mut guard = self.parent.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let seqs = &mut guard.seqs;
             let idx = idx.min(seqs.len());
             seqs.insert(idx, val);
         }
@@ -4165,8 +4335,9 @@ impl PyMusicSeqs {
 
     #[pyo3(signature = (idx=None))]
     pub fn pop(&self, idx: Option<i64>) -> PyResult<Vec<u32>> {
-        unsafe {
-            let seqs = &mut (&mut *self.parent.get()).seqs;
+        {
+            let mut guard = self.parent.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let seqs = &mut guard.seqs;
             let len = seqs.len() as i64;
             if len == 0 {
                 return Err(pyo3::exceptions::PyIndexError::new_err("pop from empty list"));
@@ -4181,38 +4352,38 @@ impl PyMusicSeqs {
     }
 
     pub fn extend(&self, vals: Vec<Vec<u32>>) {
-        unsafe { (&mut *self.parent.get()).seqs.extend(vals); }
+        { (&mut *self.parent.lock().unwrap_or_else(std::sync::PoisonError::into_inner)).seqs.extend(vals); }
     }
 
     pub fn clear(&self) {
-        unsafe { (&mut *self.parent.get()).seqs.clear(); }
+        { (&mut *self.parent.lock().unwrap_or_else(std::sync::PoisonError::into_inner)).seqs.clear(); }
     }
 
     pub fn __repr__(&self) -> String {
-        unsafe { format!("Seqs{:?}", (&*self.parent.get()).seqs) }
+        format!("Seqs{:?}", (&*self.parent.lock().unwrap_or_else(std::sync::PoisonError::into_inner)).seqs)
     }
 
     pub fn __bool__(&self) -> bool {
-        unsafe { !(&*self.parent.get()).seqs.is_empty() }
+        !(&*self.parent.lock().unwrap_or_else(std::sync::PoisonError::into_inner)).seqs.is_empty()
     }
 
     pub fn __reversed__(&self) -> Vec<Vec<u32>> {
-        unsafe { (&*self.parent.get()).seqs.iter().rev().cloned().collect() }
+        (&*self.parent.lock().unwrap_or_else(std::sync::PoisonError::into_inner)).seqs.iter().rev().cloned().collect()
     }
 
     pub fn __iadd__(&self, vals: Vec<Vec<u32>>) {
-        unsafe { (&mut *self.parent.get()).seqs.extend(vals); }
+        { (&mut *self.parent.lock().unwrap_or_else(std::sync::PoisonError::into_inner)).seqs.extend(vals); }
     }
 
     // Deprecated aliases for the whole-list bulk operations.
     pub fn from_list(&self, vals: Vec<Vec<u32>>) {
-        warn_deprecated_once("MusicSeqs.from_list", "Seqs.from_list() (use direct assignment or extend() instead)");
-        unsafe { (&mut *self.parent.get()).seqs = vals; }
+        warn_deprecated_once("MusicSeqs.from_list", "Seqs.from_list() is deprecated. Use slice assignment instead.");
+        { (&mut *self.parent.lock().unwrap_or_else(std::sync::PoisonError::into_inner)).seqs = vals; }
     }
 
     pub fn to_list(&self) -> Vec<Vec<u32>> {
-        warn_deprecated_once("MusicSeqs.to_list", "Seqs.to_list() (use list(seqs) instead)");
-        unsafe { (&*self.parent.get()).seqs.clone() }
+        warn_deprecated_once("MusicSeqs.to_list", "Seqs.to_list() is deprecated. Use list(seq) instead.");
+        (&*self.parent.lock().unwrap_or_else(std::sync::PoisonError::into_inner)).seqs.clone()
     }
 }
 
@@ -4220,23 +4391,23 @@ impl PyMusicSeqs {
 // Music wrapper (music_wrapper.rs)
 // ---------------------------------------------------------------------------
 
-// Same reasoning as SoundRef above.
-enum MusicRef {
-    Bank(usize),
-    Owned(pyxel_core::RcMusic),
-}
-
+// Same reasoning as SoundRef above. The Bank(usize)/Owned(RcMusic)
+// split's Bank variant was removed after it caused a real crash: a
+// lazily-resolved Bank(i) reference re-indexed into a possibly-changed
+// bank later and could panic out-of-bounds — a Rust panic crossing
+// the retro_run() FFI boundary aborts the whole process rather than
+// raising a catchable Python exception. Every construction site now
+// clones the Arc eagerly instead (matching upstream's own official
+// binding), so a PyMusic always holds an independent, already-resolved
+// handle.
 #[pyclass(name = "Music", unsendable)]
 pub struct PyMusic {
-    music_ref: MusicRef,
+    music: pyxel_core::RcMusic,
 }
 
 impl PyMusic {
-    pub fn rc(&self) -> &pyxel_core::RcMusic {
-        match &self.music_ref {
-            MusicRef::Bank(i) => &pyxel_core::musics()[*i],
-            MusicRef::Owned(rc) => rc,
-        }
+    pub fn rc(&self) -> pyxel_core::RcMusic {
+        self.music.clone()
     }
 }
 
@@ -4245,7 +4416,7 @@ impl PyMusic {
     // Same reasoning as PySound::new() above.
     #[new]
     pub fn new() -> Self {
-        PyMusic { music_ref: MusicRef::Owned(pyxel_core::Music::new()) }
+        PyMusic { music: pyxel_core::Music::new() }
     }
 
     #[getter]
@@ -4255,13 +4426,13 @@ impl PyMusic {
 
     #[setter]
     pub fn set_seqs(&self, seqs: Vec<Vec<u32>>) {
-        unsafe { (&mut *self.rc().get()).set(&seqs); }
+        { (&mut *self.rc().lock().unwrap_or_else(std::sync::PoisonError::into_inner)).set(&seqs); }
     }
 
     // Deprecated: snds_list (alias for seqs, getter only)
     #[getter]
     pub fn snds_list(&self) -> PyMusicSeqs {
-        warn_deprecated_once("Music.snds_list", "Music.snds_list (use Music.seqs instead)");
+        warn_deprecated_once("Music.snds_list", "Music.snds_list[ch] is deprecated. Use Music.seqs[ch] instead.");
         self.seqs()
     }
 
@@ -4287,7 +4458,7 @@ impl PyMusic {
             }
             seqs
         };
-        unsafe { (&mut *self.rc().get()).set(&seqs); }
+        { (&mut *self.rc().lock().unwrap_or_else(std::sync::PoisonError::into_inner)).set(&seqs); }
         Ok(())
     }
 }
@@ -4311,7 +4482,7 @@ impl PyMusicList {
                     String::from("list index out of range")
                 ));
             }
-            return Ok(PyMusic { music_ref: MusicRef::Bank(i as usize) }.into_py(py));
+            return Ok(PyMusic { music: pyxel_core::musics()[i as usize].clone() }.into_py(py));
         }
         if let Ok(slice) = idx.downcast::<pyo3::types::PySlice>() {
             let indices = slice.indices(len)?;
@@ -4319,12 +4490,12 @@ impl PyMusicList {
             let mut i = indices.start;
             if indices.step > 0 {
                 while i < indices.stop {
-                    result.push(PyMusic { music_ref: MusicRef::Bank(i as usize) });
+                    result.push(PyMusic { music: pyxel_core::musics()[i as usize].clone() });
                     i += indices.step;
                 }
             } else if indices.step < 0 {
                 while i > indices.stop {
-                    result.push(PyMusic { music_ref: MusicRef::Bank(i as usize) });
+                    result.push(PyMusic { music: pyxel_core::musics()[i as usize].clone() });
                     i += indices.step;
                 }
             }
@@ -4346,7 +4517,7 @@ impl PyMusicList {
     }
 
     pub fn __delitem__(&self, idx: pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<()> {
-        let musics = pyxel_core::musics();
+        let mut musics = pyxel_core::musics();
         let len = musics.len() as i64;
         if let Ok(i) = idx.extract::<i64>() {
             let i = if i < 0 { i + len } else { i };
@@ -4381,7 +4552,7 @@ impl PyMusicList {
 
     pub fn __reversed__(&self) -> Vec<PyMusic> {
         pyxel_core::musics().iter().rev()
-            .map(|rc| PyMusic { music_ref: MusicRef::Owned(rc.clone()) })
+            .map(|rc| PyMusic { music: rc.clone() })
             .collect()
     }
 
@@ -4390,7 +4561,7 @@ impl PyMusicList {
     }
 
     pub fn insert(&self, idx: usize, music: pyo3::PyRef<PyMusic>) {
-        let musics = pyxel_core::musics();
+        let mut musics = pyxel_core::musics();
         let idx = idx.min(musics.len());
         musics.insert(idx, music.rc().clone());
     }
@@ -4407,7 +4578,7 @@ impl PyMusicList {
 
     #[pyo3(signature = (idx=None))]
     pub fn pop(&self, idx: Option<i64>) -> PyResult<PyMusic> {
-        let musics = pyxel_core::musics();
+        let mut musics = pyxel_core::musics();
         let len = musics.len() as i64;
         if len == 0 {
             return Err(pyo3::exceptions::PyIndexError::new_err("pop from empty musics list"));
@@ -4417,7 +4588,7 @@ impl PyMusicList {
         if i < 0 || i >= len {
             return Err(pyo3::exceptions::PyIndexError::new_err("pop index out of range"));
         }
-        Ok(PyMusic { music_ref: MusicRef::Owned(musics.remove(i as usize)) })
+        Ok(PyMusic { music: musics.remove(i as usize) })
     }
 
     pub fn clear(&self) {
