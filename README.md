@@ -262,6 +262,10 @@ native Linux RetroArch install:
   1024x960), `dungeon-antiqua-v2.pyxapp`
 - [Tetris Pyxel](https://github.com/mehrdad-mixtape/Tetris_Pyxel/)
   (repackaged as `.pyxapp`; no external module dependencies)
+- [Chip8Mini](https://github.com/jay-kumogata/Chip8Mini) (a CHIP-8
+  emulator written in Pyxel; confirmed its `threading.Thread`-driven
+  CPU emulation loop — running independently of `update()`/`draw()` —
+  works correctly under lr-pyxel's embedded CPython)
 
 ---
 
