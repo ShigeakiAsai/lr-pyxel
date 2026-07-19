@@ -244,6 +244,17 @@ pub fn __getattr__(py: Python, name: &str) -> PyResult<Py<PyAny>> {
         "mouse_x"     => (*pyxel_core::mouse_x()).into_pyobject(py)?.into_any().unbind(),
         "mouse_y"     => (*pyxel_core::mouse_y()).into_pyobject(py)?.into_any().unbind(),
         "mouse_wheel" => (*pyxel_core::mouse_wheel()).into_pyobject(py)?.into_any().unbind(),
+        // Previously missing entirely: set_input_text()/set_dropped_files()
+        // (input_wrapper_lr.rs) let RetroArch feed values in, but there
+        // was no way for a Python script to read them back out — found
+        // while auditing lr-pyxel's API surface against upstream's.
+        // pyxel_core::input_keys()/input_text()/dropped_files() already
+        // existed (used internally by set_input_text()/
+        // set_dropped_files() themselves), so this only needed wiring
+        // up here, the same way images()/colors()/etc. already are.
+        "input_keys"    => (*pyxel_core::input_keys()).clone().into_pyobject(py)?.into_any().unbind(),
+        "input_text"    => (*pyxel_core::input_text()).clone().into_pyobject(py)?.into_any().unbind(),
+        "dropped_files" => (*pyxel_core::dropped_files()).clone().into_pyobject(py)?.into_any().unbind(),
         // Graphics
         "colors"   => PyColors.into_pyobject(py)?.into_any().unbind(),
         "screen"   => PyImage::from_rc(pyxel_core::screen().clone()).into_pyobject(py)?.into_any().unbind(),

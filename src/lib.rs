@@ -39,7 +39,7 @@ pub use variable_wrapper_lr::{__getattr__, PyColors};
 pub use tone_wrapper_lr::{PyTone, PyToneList, PyToneWavetable};
 pub use music_wrapper_lr::{PyMusicSeq, PyMusicSeqs, PyMusic, PyMusicList};
 pub use resource_wrapper_lr::{load, save, load_pal, save_pal, screenshot, screencast, reset_screencast, user_data_dir};
-pub use network_wrapper_lr::{download_file, http_get};
+pub use network_wrapper_lr::{lr_download_file, lr_http_get};
 pub use audio_wrapper_lr::{sound_set, play, playm, stop, gen_bgm, play_pos, sound_fn, music_fn, channel_fn};
 pub use graphics_wrapper_lr::{
     cls, rect, text, pset, pget, blt, bltm, blt3d, bltm3d, image, tilemap_fn,
@@ -204,8 +204,8 @@ pub fn pyxel(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(reset_screencast, m)?)?;
     m.add_function(wrap_pyfunction!(user_data_dir,    m)?)?;
     // Network
-    m.add_function(wrap_pyfunction!(download_file, m)?)?;
-    m.add_function(wrap_pyfunction!(http_get,      m)?)?;
+    m.add_function(wrap_pyfunction!(lr_download_file, m)?)?;
+    m.add_function(wrap_pyfunction!(lr_http_get,      m)?)?;
     // Input
     m.add_function(wrap_pyfunction!(btn,         m)?)?;
     m.add_function(wrap_pyfunction!(btnp,        m)?)?;

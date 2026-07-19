@@ -6,6 +6,13 @@
 //! libretro/handheld embedding (e.g. fetching remote content from
 //! within a game), implemented by shelling out to `curl` rather than
 //! linking an HTTP client crate.
+//!
+//! Both functions are prefixed `lr_` (lr_download_file, lr_http_get)
+//! rather than left bare — unlike the file-naming `_lr` suffix used
+//! throughout wrapper_lr/, this is Python-visible API a script author
+//! actually types, and an unprefixed pyxel.download_file() would look
+//! exactly like a standard Pyxel function until it broke on desktop
+//! Pyxel with AttributeError.
 
 use pyo3::prelude::*;
 
@@ -23,12 +30,12 @@ use pyo3::prelude::*;
 // update()/draw() loop, since PyO3 holds the GIL across the FFI call
 // by default and only one Python thread can run at a time regardless.
 
-/// download_file(url, save_path) -> bool
-/// Downloads `url` to `save_path` via `curl -L -s -o save_path url`.
-/// Returns True on success (curl exit code 0), False otherwise.
-/// Does not raise on HTTP/network failure — check the return value.
+// lr_download_file(url, save_path) -> bool
+// Downloads `url` to `save_path` via `curl -L -s -o save_path url`.
+// Returns True on success (curl exit code 0), False otherwise.
+// Does not raise on HTTP/network failure — check the return value.
 #[pyfunction]
-pub fn download_file(py: Python<'_>, url: &str, save_path: &str) -> PyResult<bool> {
+pub fn lr_download_file(py: Python<'_>, url: &str, save_path: &str) -> PyResult<bool> {
     let url = url.to_owned();
     let save_path = save_path.to_owned();
     let ok = py.detach(move || {
@@ -41,12 +48,12 @@ pub fn download_file(py: Python<'_>, url: &str, save_path: &str) -> PyResult<boo
     Ok(ok)
 }
 
-/// http_get(url) -> str
-/// Fetches `url` via `curl -L -s url` and returns stdout decoded as UTF-8
-/// (lossy — invalid byte sequences are replaced, never raises on that).
-/// Raises OSError only if the `curl` process itself could not be spawned.
+// lr_http_get(url) -> str
+// Fetches `url` via `curl -L -s url` and returns stdout decoded as UTF-8
+// (lossy — invalid byte sequences are replaced, never raises on that).
+// Raises OSError only if the `curl` process itself could not be spawned.
 #[pyfunction]
-pub fn http_get(py: Python<'_>, url: &str) -> PyResult<String> {
+pub fn lr_http_get(py: Python<'_>, url: &str) -> PyResult<String> {
     let url = url.to_owned();
     let output = py.detach(move || {
         std::process::Command::new("curl")

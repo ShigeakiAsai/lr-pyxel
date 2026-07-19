@@ -4,7 +4,7 @@ A libretro core that runs [Pyxel](https://github.com/kitao/pyxel) games on Retro
 
 [日本語 README](README.ja.md) | [FAQ](FAQ.md) | [Quickstart (no build required)](QUICKSTART.md)
 
-> **Status**: v0.17.5 tagged, in active development, approaching v1.0.0.
+> **Status**: v0.21.1 tagged, in active development, approaching v1.0.0.
 
 ---
 
@@ -120,6 +120,11 @@ sudo apt install build-essential cmake clang libclang-dev python3-dev
 
 ### Dependency notes
 
+- Functions prefixed `lr_` are **lr-pyxel-specific APIs that don't
+  exist on upstream Pyxel**. If the same content might also run on
+  upstream Pyxel, guard the call with `hasattr(pyxel, "lr_xxx")` or
+  wrap it in `try`/`except AttributeError` — calling one
+  unconditionally raises `AttributeError` on upstream Pyxel.
 - `Cargo.toml` pins `pyxel-core` to the `lr-pyxel` branch of
   [ShigeakiAsai/pyxel](https://github.com/ShigeakiAsai/pyxel) (a fork of
   upstream Pyxel), **not** the default branch — the fork's `main` branch is
@@ -133,9 +138,15 @@ sudo apt install build-essential cmake clang libclang-dev python3-dev
   builds must opt in explicitly. `package.mk` passes `--features lakka`
   to `cargo build`; a plain `cargo build` (e.g. for a generic Linux
   RetroArch) gets the non-Lakka defaults instead.
-- Networking (`pyxel.download_file()` / `pyxel.http_get()`) shells out to
-  the system `curl` binary rather than linking libcurl, so the target
-  device needs `curl` on its `PATH`.
+- Lakka's built-in downloader uses the system `curl` binary, which
+  Lakka ships with by default.
+- `user_data_dir()`'s save-location resolution differs between upstream
+  Pyxel and lr-pyxel. Upstream resolves under the OS home directory
+  (via `UserDirs::new()`), while lr-pyxel prefers
+  `RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY` (the location RetroArch itself
+  designates). **The same Pyxel content can end up saving to a
+  different directory on upstream Pyxel vs. lr-pyxel.** This can be
+  overridden by passing the `dir_prefix` argument explicitly.
 - `retro_init()` re-`dlopen()`s `libpython3.X.so` with `RTLD_GLOBAL`
   (via the `libc` crate) before starting the embedded interpreter. This
   is needed because RetroArch loads this core (and in turn its
