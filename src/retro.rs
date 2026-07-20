@@ -197,6 +197,42 @@ pub unsafe extern "C" fn retro_init() {
         eprintln!("[lr-pyxel] warning: could not create system_pyxel_dir \"{system_pyxel_dir}\": {e}");
     }
 
+    // RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY (cmd 31) — the directory
+    // RetroArch itself designates for this core's save data. Not
+    // Lakka-specific (any libretro frontend implements this), so
+    // queried unconditionally rather than behind #[cfg(feature =
+    // "lakka")] like roms_dir/system_pyxel_dir above.
+    //
+    // Queried once here at retro_init() time and cached into an env
+    // var, matching every other libretro environment query in this
+    // function (GET_SYSTEM_DIRECTORY, ROMS_DIR resolution, etc.) —
+    // none of them re-query per call, so this doesn't either.
+    //
+    // Consumed by wrapper_lr/resource_wrapper_lr.rs's user_data_dir()
+    // as its default dir_prefix when a script doesn't supply one
+    // itself, once that function's own dir_prefix support lands (see
+    // the upstream-proposed PR on the pyxel-core fork's separate
+    // user-data-dir-location branch — not yet cherry-picked onto the
+    // lr-pyxel branch this crate actually builds against). Until
+    // then this env var is set but unread — harmless, and saves a
+    // second round of "wire up the query" work once that lands.
+    let save_dir: Option<String> = unsafe {
+        let mut dir: *const std::os::raw::c_char = std::ptr::null();
+        let got = ENVIRON_CB.map(|cb| cb(31, &mut dir as *mut _ as *mut c_void)).unwrap_or(false);
+        if got && !dir.is_null() {
+            std::ffi::CStr::from_ptr(dir).to_str().ok()
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string())
+        } else {
+            None
+        }
+    };
+    if let Some(save_dir) = &save_dir {
+        std::env::set_var("LR_PYXEL_SAVE_DIR", save_dir);
+    } else {
+        eprintln!("[lr-pyxel] warning: GET_SAVE_DIRECTORY unavailable; user_data_dir() will fall back to pyxel-core's own home-directory resolution");
+    }
+
     // {system_pyxel_dir}/site-packages: a persistent place for
     // third-party packages the person has manually vendored (e.g. a
     // pygame or numpy wheel extracted by hand — Lakka has no pip).
