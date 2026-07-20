@@ -121,6 +121,32 @@ static mut RETRO_FRAME_COUNT: u64 = 0;
 // lr-pyxel managed frame_count (only incremented when game update runs)
 static mut LR_FRAME_COUNT: u32 = 0;
 
+// Deferred reset_all_button_states(): set true at content load/reset
+// time instead of calling reset_all_button_states() immediately.
+// pyxel_core's own internal frame_count() (distinct from
+// LR_FRAME_COUNT above — see input_wrapper_lr.rs's __getattr__,
+// which serves pyxel.frame_count from LR_FRAME_COUNT, never touching
+// this one) only advances inside flip_screen(), which retro_run()
+// only calls on a should_update frame. If
+// reset_all_button_states() (which writes an explicit Released
+// state, at whatever frame_count happens to be current, for every
+// mapped key — see input.rs) ran immediately at content load, before
+// flip_screen() had ever run even once, every one of those writes
+// landed at the same frame_count that any same-session set_btn()
+// call (test-only key-injection API) would also land on — and
+// pyxel_core's own same-frame-transition detection then treated that
+// as a Released-then-Pressed sequence, making btnr() misfire True
+// for a key that was only ever pressed, never released. Confirmed by
+// upstream's own test_input.py::TestSetButtonState::
+// test_btnr_false_without_release, which doesn't call flip() at all.
+// Deferring the actual reset to fire only after frame_count has
+// genuinely advanced past its post-reset value sidesteps this
+// without touching pyxel_core's frame_count (a value pyxel_core
+// itself owns and manages) or its internals in any way — lr-pyxel's
+// own design stance is to leave pyxel-core itself alone wherever
+// possible.
+static mut PENDING_BUTTON_RESET: bool = false;
+
 // Game-requested screen size (set by pyxel.init(), default 128x128)
 static mut GAME_W: u32 = 128;
 static mut GAME_H: u32 = 128;

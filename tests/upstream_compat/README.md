@@ -4,15 +4,15 @@ This folder contains `lr_test_upstream_suite.py`: a harness that runs
 [Pyxel](https://github.com/kitao/pyxel)'s own `pytest` test files —
 `test_channel.py`, `test_audio.py`, `test_audio_render.py`,
 `test_audio_semantics.py`, `test_errors.py`, `test_font.py`,
-`test_graphics.py`, `test_image.py`, `test_math.py`, `test_music.py`,
-`test_resize.py`, `test_resource_io.py`, `test_sequences.py`,
-`test_sound.py`, `test_system.py`, `test_tilemap.py`, `test_tone.py`,
-`test_utils.py` — **verbatim, unmodified**, against lr-pyxel's embedded
-engine.
+`test_graphics.py`, `test_image.py`, `test_input.py`, `test_math.py`,
+`test_music.py`, `test_resize.py`, `test_resource_io.py`,
+`test_sequences.py`, `test_sound.py`, `test_system.py`,
+`test_tilemap.py`, `test_tone.py`, `test_utils.py` — **verbatim,
+unmodified**, against lr-pyxel's embedded engine.
 
-## The 18 test files are not bundled here
+## The 19 test files are not bundled here
 
-This folder only contains the harness (lr-pyxel's own code). The 18
+This folder only contains the harness (lr-pyxel's own code). The 19
 `test_*.py` files themselves are fetched at runtime, straight from
 upstream Pyxel's own `main` branch
 (`https://raw.githubusercontent.com/kitao/pyxel/main/python/tests/`),
@@ -32,7 +32,7 @@ instead, fetch a specific upstream commit/tag manually rather than
 
 `downloader.pyxapp` (the in-core content downloader) has a hidden
 combo, deliberately undocumented in its own UI: hold **L + R**, then
-press **X**. This fetches the 18 test files (see list above) plus
+press **X**. This fetches the 19 test files (see list above) plus
 `_assertions.py` (a small upstream test helper some of them import —
 see "Fake modules" below) from upstream Pyxel, and
 `lr_test_upstream_suite.py` from this repo's `main` branch, straight
@@ -46,7 +46,7 @@ manual/non-Lakka setup wants the real upstream file for reference.
 
 ## Running elsewhere (native/non-Lakka builds)
 
-Fetch the 18 `test_*.py` files from upstream Pyxel's `python/tests/`
+Fetch the 19 `test_*.py` files from upstream Pyxel's `python/tests/`
 directory yourself (matching the list above), place them next to
 `lr_test_upstream_suite.py`, and run it directly — `pyxel run
 lr_test_upstream_suite.py` or via a `.pyxapp`.
@@ -90,17 +90,17 @@ since the logic (type + exact message check) is identical either way.
 
 Of upstream's test files, the following aren't run here:
 
+- `test_input.py` was previously excluded too (its `set_btn()`-style
+  test-only input-injection APIs were assumed unimplemented), but
+  lr-pyxel added mouse/keyboard support later in development without
+  this list being revisited — re-included now that those APIs exist.
+
 - Files that spawn subprocesses expecting a standalone `import pyxel`
   (`test_apps.py`, `test_examples.py`, `test_run_examples.py`) or a
   dev server (`test_start_showcase.py`) don't apply to lr-pyxel's
   embedded-module architecture.
 - `test_editor.py` and `test_cli.py` exercise `pyxel.cli`/the resource
   editor, unavailable headless.
-- `test_input.py` exclusively tests `pyxel.set_btn()`-style test-only
-  input-injection APIs that lr-pyxel has no plan to implement (see
-  "Known Limitations" in the main README) — running it would just
-  report that same permanent, already-documented gap as ~20 failures,
-  not new signal.
 - `test_import_hook.py`, `test_format_prose.py`, `test_generate_docs.py`,
   and `test_update_version.py` are the upstream repo's own dev-tooling
   tests (source-formatting checks, doc-generation scripts, version-bump

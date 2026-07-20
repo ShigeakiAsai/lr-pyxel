@@ -22,10 +22,16 @@ pyxel.init(160, 120, title="lr-pyxel upstream compat suite")
 # "Known Issues" section of README.md — this suite is what backs that
 # claim. Excluded from the full upstream set: files that spawn
 # subprocesses expecting a standalone `import pyxel`, exercise
-# `pyxel.cli`, exercise test-only input-injection APIs lr-pyxel has no
-# plan to implement, or are the repo's own dev-tooling/meta tests
-# (doc generation, source-formatting checks, version-bump scripts) —
-# see README.md's "Known exclusions" for the full rationale per file.
+# `pyxel.cli`, or are the repo's own dev-tooling/meta tests (doc
+# generation, source-formatting checks, version-bump scripts) — see
+# README.md's "Known exclusions" for the full rationale per file.
+#
+# test_input.py was previously excluded too (its set_btn()-style
+# test-only input-injection APIs were assumed unimplemented), but
+# lr-pyxel added mouse/keyboard support (set_btn/set_btnv/
+# set_mouse_pos/set_input_text/set_dropped_files, input_wrapper_lr.rs)
+# later in development without this exclusion list being revisited —
+# re-added now that those APIs actually exist.
 TEST_FILES = [
     "test_channel.py",
     "test_tone.py",
@@ -41,6 +47,7 @@ TEST_FILES = [
     "test_font.py",
     "test_graphics.py",
     "test_image.py",
+    "test_input.py",
     "test_resize.py",
     "test_resource_io.py",
     "test_sequences.py",

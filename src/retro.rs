@@ -878,7 +878,7 @@ pub unsafe extern "C" fn retro_load_game(game: *const c_void) -> bool {
         *pyxel_core::frame_count() = 0;
         LR_FRAME_COUNT    = 0;
         input::PREV_BUTTONS = 0;
-        input::reset_all_button_states();
+        PENDING_BUTTON_RESET = true; // deferred — see lib.rs's comment on this flag
         reset_color_palette();
         reset_channel_gains();
         // Stop audio from previous content
@@ -980,7 +980,7 @@ pub unsafe extern "C" fn retro_load_game(game: *const c_void) -> bool {
         *pyxel_core::frame_count() = 0;
         LR_FRAME_COUNT    = 0;
         input::PREV_BUTTONS = 0;
-        input::reset_all_button_states();
+        PENDING_BUTTON_RESET = true; // deferred — see lib.rs's comment on this flag
         reset_color_palette();
         reset_channel_gains();
 
@@ -1218,6 +1218,16 @@ pub unsafe extern "C" fn retro_run() {
             LR_FRAME_COUNT += 1;
 
             pyxel_core::Pyxel::flip_screen();
+
+            // Consume the deferred button-state reset here, now that
+            // pyxel_core's own internal frame_count() has genuinely
+            // advanced past whatever value it held at content load —
+            // see PENDING_BUTTON_RESET's declaration in lib.rs for
+            // the full reasoning.
+            if PENDING_BUTTON_RESET {
+                input::reset_all_button_states();
+                PENDING_BUTTON_RESET = false;
+            }
         }
 
     } else {
@@ -1290,7 +1300,7 @@ unsafe fn launch_frontend() {
     *pyxel_core::frame_count() = 0;
     LR_FRAME_COUNT    = 0;
     input::PREV_BUTTONS = 0;
-    input::reset_all_button_states();
+    PENDING_BUTTON_RESET = true; // deferred — see lib.rs's comment on this flag
     reset_color_palette();
     reset_channel_gains();
     if PYXEL_READY {
@@ -1352,7 +1362,7 @@ unsafe fn load_game_from_path(path: &str) {
     *pyxel_core::frame_count() = 0;
     LR_FRAME_COUNT    = 0;
     input::PREV_BUTTONS = 0;
-    input::reset_all_button_states();
+    PENDING_BUTTON_RESET = true; // deferred — see lib.rs's comment on this flag
     reset_color_palette();
     reset_channel_gains();
     // Note: SPLASH_COUNT is NOT reset here; splash only shows on core-less boot
