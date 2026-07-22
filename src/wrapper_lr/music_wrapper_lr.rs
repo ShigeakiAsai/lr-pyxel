@@ -406,6 +406,18 @@ impl PyMusic {
         { (&mut *self.rc().lock().unwrap_or_else(std::sync::PoisonError::into_inner)).set(&seqs); }
         Ok(())
     }
+
+    // Missing entirely until now — same gap, same fix as
+    // PySound::save() above (see its comment for the full reasoning).
+    // pyxel_core::Music::save() renders `sec` seconds of this Music's
+    // full arrangement (all its channel sequences) and writes it out
+    // as a real file, optionally transcoding via ffmpeg.
+    #[pyo3(signature = (filename, sec, ffmpeg=None))]
+    pub fn save(&self, filename: &str, sec: f32, ffmpeg: Option<bool>) -> PyResult<()> {
+        let music = (&*self.rc().lock().unwrap_or_else(std::sync::PoisonError::into_inner)).clone();
+        music.save(filename, sec, ffmpeg)
+            .map_err(pyo3::exceptions::PyException::new_err)
+    }
 }
 
 #[pyclass(name = "MusicList")]

@@ -233,6 +233,22 @@ impl PySound {
     pub fn total_sec(&self) -> Option<f32> {
         (&*self.rc().lock().unwrap_or_else(std::sync::PoisonError::into_inner)).total_seconds()
     }
+
+    // Missing entirely until now — pyxel_core::Sound::save() itself
+    // was always implemented (renders `sec` seconds of this Sound's
+    // audio and writes it out as a real file, optionally transcoding
+    // via ffmpeg), but lr-pyxel's own binding never wired it up.
+    // Clones the Sound's data out from behind the lock before calling
+    // save() — matches upstream's own binding (sound_wrapper.rs)
+    // exactly, likely so this Sound's lock isn't held for the
+    // duration of what can be a slow operation (rendering audio, then
+    // file I/O and possibly an ffmpeg subprocess).
+    #[pyo3(signature = (filename, sec, ffmpeg=None))]
+    pub fn save(&self, filename: &str, sec: f32, ffmpeg: Option<bool>) -> PyResult<()> {
+        let sound = (&*self.rc().lock().unwrap_or_else(std::sync::PoisonError::into_inner)).clone();
+        sound.save(filename, sec, ffmpeg)
+            .map_err(pyo3::exceptions::PyException::new_err)
+    }
 }
 
 #[pyclass(name = "SoundList")]
