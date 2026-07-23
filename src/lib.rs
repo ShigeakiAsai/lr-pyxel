@@ -115,6 +115,17 @@ const FPS: u32      = 60;
 // Used to skip frames: a 30fps game runs update/draw every 2nd retro_run() call
 static mut GAME_FPS: u32 = 30;
 
+/// The capture_scale a script passed to pyxel.init(), if any —
+/// remembered here since pyxel-core's own equivalent (Resource's
+/// capture_scale field) is fixed at Resource construction time (once,
+/// at lr-pyxel's own Rust-bootstrap pyxel_core::init() call, before
+/// any script's pyxel.init() runs) with no public setter to change it
+/// afterward. Consumed by screenshot()/screencast()
+/// (resource_wrapper_lr.rs) as the default when their own `scale`
+/// argument is omitted, rather than falling through to pyxel-core's
+/// own (frozen, script-uncustomizable) default.
+static mut LR_CAPTURE_SCALE: Option<u32> = None;
+
 // RetroArch frame counter (incremented every retro_run())
 static mut RETRO_FRAME_COUNT: u64 = 0;
 

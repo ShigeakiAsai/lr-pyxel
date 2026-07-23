@@ -56,8 +56,49 @@ pub fn init(
         warn_deprecated_once("init.caption", "init()'s caption argument (use title instead)");
     }
     let title = title.or(caption);
-    let _ = (title, quit_key, display_scale, capture_scale, capture_sec);
+    // title/quit_key/display_scale: window-level concepts with no
+    // meaning in headless libretro mode (no real window exists) —
+    // same reasoning as the standalone title()/fullscreen()/
+    // screen_mode() functions below, which are no-ops for the same
+    // reason.
+    //
+    // capture_scale/capture_sec: NOT genuinely headless-inapplicable
+    // like the above — these set pyxel_core's own default scale/
+    // duration for screenshot()/screencast() when called without
+    // explicit args (see save_screenshot()/save_screencast() in
+    // pyxel-core's resource.rs: `scale.unwrap_or(self.resource.
+    // capture_scale)`). Upstream's own init() forwards both straight
+    // into pyxel_core::init(), which stores them at Resource
+    // construction time. lr-pyxel's own pyxel_core::init() call
+    // happens once, at Rust bootstrap, with no way to route a
+    // script's later pyxel.init() values into it afterward (no public
+    // setter exists on the already-constructed Pyxel singleton) — so
+    // these two are silently ignored here, a genuine (if minor) gap
+    // rather than an intentional no-op, discovered during a
+    // systematic audit of headless-mode no-ops. Scripts can work
+    // around this by always passing scale explicitly to screenshot()/
+    // screencast() rather than relying on the init()-level default.
+    // Fixing this properly would need a new pyxel-core setter (not
+    // pursued for now — same category as the dir_prefix proposal:
+    // touches pyxel-core itself, not something to do lightly).
+    //
+    // capture_scale specifically CAN be honored at the wrapper level
+    // though (see LR_CAPTURE_SCALE's own declaration in lib.rs) — no
+    // pyxel-core setter needed, since screenshot()/screencast()'s own
+    // `scale` parameter already lets a per-call value override
+    // pyxel-core's frozen default; this just remembers init()'s value
+    // to use as lr-pyxel's own substitute default when a call omits
+    // scale, rather than falling through to pyxel-core's own.
+    // capture_sec has no equivalent per-call override to piggyback on
+    // (screencast()'s own signature has no `sec` parameter at all —
+    // it's fixed by the ring buffer's size, not something
+    // customizable at save time), so that one's still genuinely
+    // stuck without a pyxel-core setter or an independent
+    // pyxel_core::Screencast instance (see the backlog notes on
+    // that).
+    let _ = (title, quit_key, display_scale, capture_sec);
     unsafe {
+        LR_CAPTURE_SCALE = capture_scale;
         // Save game-requested size and FPS
         GAME_W = width.max(1);
         GAME_H = height.max(1);

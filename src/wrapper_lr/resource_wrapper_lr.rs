@@ -97,9 +97,15 @@ pub fn screenshot(filename: Option<&str>, scale: Option<u32>) -> PyResult<()> {
     // ourselves instead — see default_capture_filename() below.
     let owned_filename = filename.map(str::to_string)
         .or_else(|| default_capture_filename("screenshot_directory"));
+    // scale=None: substitute whatever capture_scale the script passed
+    // to pyxel.init() (see LR_CAPTURE_SCALE's own declaration in
+    // lib.rs), rather than falling through to pyxel-core's own frozen
+    // default (which init()'s own capture_scale argument can't reach
+    // — see init()'s comment in system_wrapper_lr.rs).
+    let effective_scale = scale.or(unsafe { LR_CAPTURE_SCALE });
     unsafe {
         if !PYXEL_READY { return Ok(()); }
-        pyxel_core::pyxel().save_screenshot(owned_filename.as_deref(), scale)
+        pyxel_core::pyxel().save_screenshot(owned_filename.as_deref(), effective_scale)
             .map_err(pyo3::exceptions::PyException::new_err)
     }
 }
@@ -113,9 +119,12 @@ pub fn screencast(filename: Option<&str>, scale: Option<u32>) -> PyResult<()> {
     // media vs still screenshots.
     let owned_filename = filename.map(str::to_string)
         .or_else(|| default_capture_filename("recording_output_directory"));
+    // scale=None: same LR_CAPTURE_SCALE substitution as screenshot()
+    // above.
+    let effective_scale = scale.or(unsafe { LR_CAPTURE_SCALE });
     unsafe {
         if !PYXEL_READY { return Ok(()); }
-        pyxel_core::pyxel().save_screencast(owned_filename.as_deref(), scale)
+        pyxel_core::pyxel().save_screencast(owned_filename.as_deref(), effective_scale)
             .map_err(pyo3::exceptions::PyException::new_err)
     }
 }
