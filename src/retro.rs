@@ -180,6 +180,17 @@ pub unsafe extern "C" fn retro_init() {
 
     std::env::set_var("LR_PYXEL_ROMS_DIR", &roms_dir);
 
+    // Cheap existence check only — see RETROARCH_CFG_PATH's own
+    // declaration in lib.rs for why the actual read happens later,
+    // per-call, in resolve_capture_dir() instead of here.
+    #[cfg(feature = "lakka")]
+    {
+        const CFG_PATH: &str = "/storage/.config/retroarch/retroarch.cfg";
+        RETROARCH_CFG_PATH = std::path::Path::new(CFG_PATH).exists()
+            .then(|| CFG_PATH.to_string());
+    }
+
+
     // On Lakka, ROMS_DIR is treated as a hard root the launcher can't
     // navigate above (matches the closed-appliance philosophy). On a
     // general Linux install, allow navigating the whole filesystem,

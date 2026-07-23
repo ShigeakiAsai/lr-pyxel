@@ -189,6 +189,23 @@ pub static mut PENDING_CONTENT: Option<String> = None;
 /// already-running script's own call stack.
 pub static mut CURRENT_CONTENT_PATH: Option<String> = None;
 
+/// The path to retroarch.cfg, if it exists — checked once at
+/// retro_init() time (a cheap existence check, not a read; None if
+/// missing). Stored here (rather than a bare bool, and rather than
+/// hardcoding the path string wherever it's needed) so any future
+/// code that wants some other retroarch.cfg-only setting — anything
+/// with no dedicated RETRO_ENVIRONMENT_GET_* call, the same situation
+/// screenshot_directory/recording_output_directory are in — can reuse
+/// this same discovered path instead of re-deriving it. See
+/// resolve_capture_dir() in wrapper_lr/resource_wrapper_lr.rs for the
+/// current (only, so far) consumer: it only bothers actually opening/
+/// reading the file per-call (screenshot()/screencast() each time
+/// they're invoked, to see the latest saved config — see that
+/// function's own comment) if this is Some, rather than repeatedly
+/// attempting a read that's already known to fail. Always None on
+/// non-Lakka builds (this path is Lakka-specific to begin with).
+pub static mut RETROARCH_CFG_PATH: Option<String> = None;
+
 // ---------------------------------------------------------------------------
 // Pyxel Python module registration
 // ---------------------------------------------------------------------------
