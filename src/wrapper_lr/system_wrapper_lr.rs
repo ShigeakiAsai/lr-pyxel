@@ -147,16 +147,22 @@ pub fn show() {
 // flip() — advances one frame manually (used instead of pyxel.run()).
 // Unsupported in libretro (framing is driven by retro_run()); raises
 // instead of no-op'ing so flip()-based main loops fail fast (see below).
+//
+// A greenlet-based bridge was prototyped here (running the whole
+// script inside a greenlet so flip() could switch back out to
+// retro_run() instead of blocking it forever) but reverted: it
+// SIGSEGV'd RetroArch on real hardware after a few working frames.
+// Root cause understood in outline (a PyO3 Python<'_> token is only
+// valid for the Python::attach() scope that issued it, but a
+// greenlet-paused script's Rust stack — and the token it's holding —
+// survives across frames, well past when that scope has already
+// ended and released the GIL) but not something to keep iterating on
+// live hardware. See project notes ("flip() + greenlet — parked, high
+// wall found") before attempting this again — package.mk for greenlet
+// itself is still in place (harmless either way), just not wired up
+// here.
 #[pyfunction]
 pub fn flip() -> PyResult<()> {
-    // Previously a silent no-op. Scripts using the flip()-based main loop
-    // pattern (`while True: ... pyxel.flip()`, e.g. 99_flip_animation.py)
-    // never call back into Rust between flip() calls, so with flip() doing
-    // nothing the loop never terminates — it spins forever inside the
-    // single py.run() call that runs the script, permanently
-    // hanging retro_run() (RetroArch itself freezes, no crash, no error).
-    // Raising here instead lets the loop's first flip() call unwind back
-    // out with a clear, actionable message instead of a silent hang.
     Err(pyo3::exceptions::PyRuntimeError::new_err(
         "pyxel.flip() is not supported in lr-pyxel (libretro build). \
          Games driven by a `while True: ... pyxel.flip()` main loop can't \
@@ -170,8 +176,30 @@ pub fn flip() -> PyResult<()> {
 
 #[pyfunction]
 pub fn reset() {
-    // In libretro, reset = reload current content
-    // For now this is a no-op; future: trigger RETRO_ENVIRONMENT_RESET
+    // Previously a genuine no-op. Upstream's own reset() (Pyxel::restart())
+    // closes audio and restarts the whole process/script from scratch —
+    // lr-pyxel has no equivalent "restart this process" primitive (it's
+    // one embedded interpreter inside a single long-running RetroArch
+    // process, not a standalone executable), so the closest equivalent is
+    // reloading whatever content is currently running, the same way
+    // switching content from the frontend browser already works.
+    //
+    // Deliberately just sets PENDING_CONTENT (consumed by retro_run(),
+    // see near PENDING_CONTENT.take() there) rather than calling
+    // load_game_from_path() directly here — this function runs from
+    // inside the currently-executing script's own call stack, and
+    // recursively re-entering py.run() for a fresh script from there
+    // would leave the OLD script's remaining code (after this reset()
+    // call site) still on the stack, ready to keep executing once the
+    // new script's py.run() call returns — not the "start over, nothing
+    // of the old run continues" semantics reset() is supposed to have.
+    // Deferring to the next retro_run() iteration side-steps that
+    // entirely, matching how a normal content switch already works.
+    unsafe {
+        // addr_of! avoids forming a shared reference to the static
+        // directly (see retro_reset()'s matching comment in retro.rs).
+        PENDING_CONTENT = (*std::ptr::addr_of!(CURRENT_CONTENT_PATH)).clone();
+    }
 }
 
 /// Load a content file from the frontend browser.

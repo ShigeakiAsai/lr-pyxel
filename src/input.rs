@@ -8,7 +8,7 @@
 //! changes.
 
 use crate::{
-    GAME_W, GAME_H,
+    GAME_W, GAME_H, INPUT_STATE,
     KEY_Z, KEY_X, KEY_RETURN, KEY_UP, KEY_DOWN, KEY_LEFT, KEY_RIGHT,
     KEY_DELETE,
     KEY_INSERT, KEY_HOME, KEY_END, KEY_PAGEUP, KEY_PAGEDOWN,
@@ -229,21 +229,58 @@ const KEY_MAP2: &[(u32, u32)] = &[
 /// stale stuck entry, so no leftover state can survive a content switch.
 pub unsafe fn reset_all_button_states() {
     if !crate::PYXEL_READY { return; }
+    const RETRO_DEVICE_JOYPAD: u32 = 1;
     let mut px = pyxel_core::pyxel();
-    for &(_, key) in KEY_MAP {
-        px.set_button_state(key, false);
+    // Refined once already (querying actual state instead of blind
+    // false) but that still wasn't quite right: writing
+    // set_button_state(key, true) for a still-held key stamps a FRESH
+    // Pressed entry at *this* (deferred, post-flip_screen) frame_count
+    // — and since pyxel_core's frame_count() doesn't advance again
+    // until the *next* frame's own flip_screen(), that next frame's
+    // btnp() check sees "Pressed, timestamped at the current frame"
+    // and reports a brand-new press, even though the key was held
+    // continuously the whole time. Confirmed on real hardware: the
+    // reset()-re-triggers-itself loop still happened, just one frame
+    // later than before.
+    //
+    // Correct fix: for a key that's still genuinely held, don't touch
+    // it at all — leave whatever entry it already has (from whenever
+    // it was legitimately pressed, at its own older frame_count)
+    // completely alone, so no fresh transition gets recorded. Only
+    // keys that are NOT currently held get an explicit Released
+    // write, which is all the original stuck-key prevention ever
+    // needed anyway.
+    for &(bit, key) in KEY_MAP {
+        let pressed = INPUT_STATE
+            .map(|state| state(0, RETRO_DEVICE_JOYPAD, 0, bit) != 0)
+            .unwrap_or(false);
+        if !pressed {
+            px.set_button_state(key, false);
+        }
     }
-    for &(_, key) in KEY_MAP2 {
-        px.set_button_state(key, false);
+    for &(bit, key) in KEY_MAP2 {
+        let pressed = INPUT_STATE
+            .map(|state| state(1, RETRO_DEVICE_JOYPAD, 0, bit) != 0)
+            .unwrap_or(false);
+        if !pressed {
+            px.set_button_state(key, false);
+        }
     }
-    // Mouse buttons are just as susceptible to the same stuck-press bug
-    // (a SELECT-interrupted click leaves a stale "Pressed" entry), so
-    // reset them here too. Also recenter the accumulated cursor position
-    // for the new content, rather than carrying over wherever the
-    // previous game's cursor happened to be.
-    px.set_button_state(MOUSE_BUTTON_LEFT,   false);
-    px.set_button_state(MOUSE_BUTTON_RIGHT,  false);
-    px.set_button_state(MOUSE_BUTTON_MIDDLE, false);
+    // Mouse buttons: same refined approach as joypad/keyboard — only
+    // touch (force-release) a button that isn't currently held. Also
+    // recenter the accumulated cursor position for the new content,
+    // rather than carrying over wherever the previous game's cursor
+    // happened to be.
+    const RETRO_DEVICE_MOUSE: u32 = 2;
+    const ID_MOUSE_LEFT: u32   = 2;
+    const ID_MOUSE_RIGHT: u32  = 3;
+    const ID_MOUSE_MIDDLE: u32 = 6;
+    let mouse_pressed = |id: u32| INPUT_STATE
+        .map(|state| state(0, RETRO_DEVICE_MOUSE, 0, id) != 0)
+        .unwrap_or(false);
+    if !mouse_pressed(ID_MOUSE_LEFT)   { px.set_button_state(MOUSE_BUTTON_LEFT,   false); }
+    if !mouse_pressed(ID_MOUSE_RIGHT)  { px.set_button_state(MOUSE_BUTTON_RIGHT,  false); }
+    if !mouse_pressed(ID_MOUSE_MIDDLE) { px.set_button_state(MOUSE_BUTTON_MIDDLE, false); }
     PREV_MOUSE_BUTTONS = 0;
     // Not centering on GAME_W/GAME_H here: this runs before the new
     // content's dimensions are set, so those globals would still
@@ -260,13 +297,19 @@ pub unsafe fn reset_all_button_states() {
     // to hidden, matching pyxel_core's own initial state.
     px.set_mouse_visible(false);
 
-    // Keyboard keys are susceptible to the exact same stuck-press bug
-    // as joypad buttons and mouse buttons above (a SELECT-interrupted
-    // keypress leaves a stale "Pressed" entry for the new content).
-    for &(_, key) in RETROK_TABLE {
-        px.set_button_state(key, false);
+    // Keyboard: same refined approach — only force-release a key that
+    // isn't currently held, leaving a genuinely-still-held key's
+    // existing (older-frame_count) entry completely untouched.
+    const RETRO_DEVICE_KEYBOARD: u32 = 3;
+    for (i, &(retrok, key)) in RETROK_TABLE.iter().enumerate() {
+        let pressed = INPUT_STATE
+            .map(|state| state(0, RETRO_DEVICE_KEYBOARD, 0, retrok) != 0)
+            .unwrap_or(false);
+        if !pressed {
+            px.set_button_state(key, false);
+        }
+        PREV_KEYBOARD_KEYS[i] = pressed;
     }
-    PREV_KEYBOARD_KEYS = [false; RETROK_TABLE.len()];
 }
 
 /// Translate libretro joypad bitmask to Pyxel key states.

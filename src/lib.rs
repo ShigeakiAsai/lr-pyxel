@@ -178,6 +178,17 @@ static mut SPLASH_COUNT: u32 = 0;
 /// Content path requested by the frontend browser (set by pyxel.load_content())
 pub static mut PENDING_CONTENT: Option<String> = None;
 
+/// The path of whatever content is currently loaded and running (set at
+/// the top of load_game_from_path(), before any static-parse/extraction
+/// work happens — always the original path passed in, e.g. a .pyxapp
+/// path, not wherever it got temporarily extracted to). Used by
+/// pyxel.reset() and retro_reset() to know what to reload: both just
+/// set PENDING_CONTENT to this same path, reusing the existing
+/// content-switch machinery in retro_run() rather than recursively
+/// calling back into load_game_from_path()/py.run() from inside an
+/// already-running script's own call stack.
+pub static mut CURRENT_CONTENT_PATH: Option<String> = None;
+
 // ---------------------------------------------------------------------------
 // Pyxel Python module registration
 // ---------------------------------------------------------------------------

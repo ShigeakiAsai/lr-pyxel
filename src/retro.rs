@@ -6,6 +6,29 @@ use pyo3::prelude::*;
 
 use crate::*;
 
+// Re-reads the current joypad #0 bitmask via INPUT_STATE, matching
+// exactly what retro_run()'s own polling loop does (see there) —
+// factored out so load_game_from_path() can snapshot "what's actually
+// held right now" as PREV_BUTTONS's new baseline, instead of blindly
+// zeroing it (see load_game_from_path()'s own comment on
+// PREV_BUTTONS for why that matters). Doesn't call INPUT_POLL itself
+// — the only place this gets called from (retro_run(), including via
+// load_game_from_path() further down the same call) has already
+// polled once at the very top of this frame, and re-polling
+// mid-frame isn't guaranteed safe/meaningful with every libretro
+// frontend.
+unsafe fn poll_joypad_bitmask() -> u32 {
+    let mut buttons: u32 = 0;
+    if let Some(state) = INPUT_STATE {
+        for bit in 0u32..16 {
+            if state(0, rust_libretro_sys::RETRO_DEVICE_JOYPAD, 0, bit) != 0 {
+                buttons |= 1 << bit;
+            }
+        }
+    }
+    buttons
+}
+
 // ---------------------------------------------------------------------------
 // Environment / pixel format
 // ---------------------------------------------------------------------------
@@ -913,7 +936,7 @@ pub unsafe extern "C" fn retro_load_game(game: *const c_void) -> bool {
         RETRO_FRAME_COUNT = 0;
         *pyxel_core::frame_count() = 0;
         LR_FRAME_COUNT    = 0;
-        input::PREV_BUTTONS = 0;
+        input::PREV_BUTTONS = poll_joypad_bitmask(); // see poll_joypad_bitmask()'s comment above
         PENDING_BUTTON_RESET = true; // deferred — see lib.rs's comment on this flag
         reset_color_palette();
         reset_channel_gains();
@@ -1015,7 +1038,7 @@ pub unsafe extern "C" fn retro_load_game(game: *const c_void) -> bool {
         RETRO_FRAME_COUNT = 0;
         *pyxel_core::frame_count() = 0;
         LR_FRAME_COUNT    = 0;
-        input::PREV_BUTTONS = 0;
+        input::PREV_BUTTONS = poll_joypad_bitmask(); // see poll_joypad_bitmask()'s comment above
         PENDING_BUTTON_RESET = true; // deferred — see lib.rs's comment on this flag
         reset_color_palette();
         reset_channel_gains();
@@ -1335,7 +1358,7 @@ unsafe fn launch_frontend() {
     RETRO_FRAME_COUNT = 0;
     *pyxel_core::frame_count() = 0;
     LR_FRAME_COUNT    = 0;
-    input::PREV_BUTTONS = 0;
+    input::PREV_BUTTONS = poll_joypad_bitmask(); // see poll_joypad_bitmask()'s comment above
     PENDING_BUTTON_RESET = true; // deferred — see lib.rs's comment on this flag
     reset_color_palette();
     reset_channel_gains();
@@ -1391,13 +1414,18 @@ unsafe fn launch_frontend() {
 /// Load a game from a file path (called from frontend or PENDING_CONTENT).
 #[allow(static_mut_refs)]
 unsafe fn load_game_from_path(path: &str) {
+    // Record what's being loaded, before any resolution/extraction
+    // happens, so pyxel.reset()/retro_reset() know what to reload
+    // later (see CURRENT_CONTENT_PATH's declaration in lib.rs).
+    CURRENT_CONTENT_PATH = Some(path.to_string());
+
     // Reset state
     PY_UPDATE = None;
     PY_DRAW   = None;
     RETRO_FRAME_COUNT = 0;
     *pyxel_core::frame_count() = 0;
     LR_FRAME_COUNT    = 0;
-    input::PREV_BUTTONS = 0;
+    input::PREV_BUTTONS = poll_joypad_bitmask(); // see poll_joypad_bitmask()'s comment above
     PENDING_BUTTON_RESET = true; // deferred — see lib.rs's comment on this flag
     reset_color_palette();
     reset_channel_gains();
@@ -1584,7 +1612,24 @@ unsafe fn load_game_from_path(path: &str) {
 // Required stubs
 // ---------------------------------------------------------------------------
 
-#[no_mangle] pub unsafe extern "C" fn retro_reset() {}
+// Called by RetroArch itself (e.g. the Quick Menu's Restart/Reset
+// option) — previously a complete no-op, so pressing it visibly did
+// nothing. Reuses the exact same deferred-reload mechanism as
+// pyxel.reset() (see its implementation in system_wrapper_lr.rs for
+// the full reasoning): just sets PENDING_CONTENT to whatever's
+// currently loaded, consumed by retro_run() on its next iteration.
+// Deferring here too (rather than calling load_game_from_path()
+// directly, which would itself be safe at this specific call site
+// since no Python script is actually executing when RetroArch invokes
+// this) keeps a single, consistently-tested reload code path instead
+// of two subtly different ones.
+#[no_mangle] pub unsafe extern "C" fn retro_reset() {
+    // addr_of! avoids forming a shared reference to the static
+    // directly (CURRENT_CONTENT_PATH.clone() would implicitly take
+    // `&CURRENT_CONTENT_PATH` for the method call, which newer Rust
+    // editions flag/deny under static_mut_refs).
+    PENDING_CONTENT = (*std::ptr::addr_of!(CURRENT_CONTENT_PATH)).clone();
+}
 #[no_mangle] pub unsafe extern "C" fn retro_set_controller_port_device(_p: c_uint, _d: c_uint) {}
 #[no_mangle] pub unsafe extern "C" fn retro_api_version() -> c_uint { rust_libretro_sys::RETRO_API_VERSION as c_uint }
 #[no_mangle] pub unsafe extern "C" fn retro_serialize_size() -> usize { 0 }
