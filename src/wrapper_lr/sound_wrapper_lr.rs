@@ -208,12 +208,23 @@ impl PySound {
     }
 
     // Deprecated: old_mml (legacy MML dialect, predates the current
-    // mml() syntax)
-    pub fn old_mml(&self, code: &str) -> PyResult<()> {
+    // mml() syntax). Signature was previously `code: &str` (required)
+    // — found via the 151-item audit (comparing against upstream's
+    // own sound_wrapper.rs source directly, not just
+    // api-reference.json) that upstream accepts `code=None` too,
+    // clearing the MML exactly like mml(None) does (both dialects
+    // parse into the same underlying notes/tones/volumes/effects
+    // state, so clearing is the same operation regardless of which
+    // syntax set it).
+    #[pyo3(signature = (code=None))]
+    pub fn old_mml(&self, code: Option<&str>) -> PyResult<()> {
         warn_deprecated_once("Sound.old_mml", "Sound.old_mml(code) is deprecated. Use Sound.mml(code) instead.");
-        {
-            (&mut *self.rc().lock().unwrap_or_else(std::sync::PoisonError::into_inner)).old_mml(code)
-                .map_err(pyo3::exceptions::PyException::new_err)
+        let rc = self.rc();
+        let mut guard = rc.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let snd = &mut *guard;
+        match code {
+            None => { snd.clear_mml(); Ok(()) }
+            Some(c) => snd.old_mml(c).map_err(pyo3::exceptions::PyException::new_err),
         }
     }
 
