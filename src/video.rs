@@ -61,3 +61,34 @@ pub unsafe fn submit_fallback_frame() {
         video(fb.as_ptr() as *const c_void, SCREEN_W, SCREEN_H, (SCREEN_W * 2) as usize);
     }
 }
+
+/// Feeds the current screen buffer into lr-pyxel's own, independent
+/// Screencast instance (LR_SCREENCAST — see its declaration in
+/// lib.rs for why this exists separately from pyxel-core's own
+/// internal one). No-op if no script has requested capture_sec (i.e.
+/// LR_SCREENCAST is None).
+///
+/// Mirrors pyxel-core's own capture_screen() (resource.rs) as closely
+/// as an external crate can: same width/height/frame_count source
+/// (pyxel_core::frame_count(), not lr-pyxel's own LR_FRAME_COUNT —
+/// Screencast's frame-delay math is keyed on this counter, so using a
+/// different one here would desync GIF frame timing from what
+/// pyxel-core's own screen_delay() expects). The one unavoidable
+/// difference: pyxel-core's own version reaches Image's private
+/// canvas.data field directly, which isn't accessible from outside
+/// the crate — data_ptr() (already public, already used by
+/// submit_pyxel_frame() above) stands in for it instead.
+pub unsafe fn capture_lr_screencast_frame() {
+    let Some(ref mut screencast) = crate::LR_SCREENCAST else { return; };
+
+    let screen_rc = screen();
+    let w = (*screen_rc.as_ptr()).width();
+    let h = (*screen_rc.as_ptr()).height();
+    let src: *const u8 = (*screen_rc.as_ptr()).data_ptr() as *const u8;
+    let pixel_count = (w * h) as usize;
+    let image = std::slice::from_raw_parts(src, pixel_count);
+
+    let palette = pyxel_core::colors();
+
+    screencast.capture(w, h, image, &palette, *pyxel_core::frame_count());
+}

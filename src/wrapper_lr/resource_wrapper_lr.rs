@@ -118,14 +118,32 @@ pub fn screencast(filename: Option<&str>, scale: Option<u32>) -> PyResult<()> {
     // instead — RetroArch's own separate convention for recorded
     // media vs still screenshots.
     let owned_filename = filename.map(str::to_string)
-        .or_else(|| default_capture_filename("recording_output_directory"));
+        .or_else(|| default_capture_filename("recording_output_directory"))
+        .unwrap_or_else(|| "pyxel-screencast".to_string());
     // scale=None: same LR_CAPTURE_SCALE substitution as screenshot()
-    // above.
-    let effective_scale = scale.or(unsafe { LR_CAPTURE_SCALE });
+    // above. 2 matches pyxel-core's own DEFAULT_CAPTURE_SCALE
+    // (settings.rs) as the final fallback if a script never set
+    // capture_scale via init() either.
+    let effective_scale = scale.or(unsafe { LR_CAPTURE_SCALE }).unwrap_or(2);
     unsafe {
         if !PYXEL_READY { return Ok(()); }
-        pyxel_core::pyxel().save_screencast(owned_filename.as_deref(), effective_scale)
-            .map_err(pyo3::exceptions::PyException::new_err)
+        // Prefer lr-pyxel's own independent Screencast instance (see
+        // LR_SCREENCAST's declaration in lib.rs) — sized from
+        // whatever capture_sec the script actually requested via
+        // init(), unlike the Pyxel singleton's own internal one
+        // (fixed at Resource construction time, before any script's
+        // init() ever runs). Falls back to pyxel-core's own
+        // save_screencast() only if LR_SCREENCAST somehow doesn't
+        // exist (shouldn't normally happen — init() always creates
+        // one — but PYXEL_READY could in principle be true from an
+        // earlier session's leftover state in some edge case).
+        if let Some(ref mut screencast) = LR_SCREENCAST {
+            screencast.save(&owned_filename, effective_scale)
+                .map_err(pyo3::exceptions::PyException::new_err)
+        } else {
+            pyxel_core::pyxel().save_screencast(Some(&owned_filename), Some(effective_scale))
+                .map_err(pyo3::exceptions::PyException::new_err)
+        }
     }
 }
 
@@ -223,7 +241,15 @@ fn resolve_capture_dir(cfg_key: &str) -> String {
 
 #[pyfunction]
 pub fn reset_screencast() {
-    unsafe { if PYXEL_READY { pyxel_core::pyxel().reset_screencast(); } }
+    unsafe {
+        if PYXEL_READY { pyxel_core::pyxel().reset_screencast(); }
+        // Also reset lr-pyxel's own independent instance (see
+        // LR_SCREENCAST's declaration in lib.rs) — pyxel_core's own
+        // reset_screencast() above only touches its own internal one.
+        if let Some(ref mut screencast) = LR_SCREENCAST {
+            screencast.reset();
+        }
+    }
 }
 
 #[pyfunction]

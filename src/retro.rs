@@ -1288,6 +1288,7 @@ pub unsafe extern "C" fn retro_run() {
             LR_FRAME_COUNT += 1;
 
             pyxel_core::Pyxel::flip_screen();
+            video::capture_lr_screencast_frame();
 
             // Consume the deferred button-state reset here, now that
             // pyxel_core's own internal frame_count() has genuinely

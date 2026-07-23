@@ -172,6 +172,21 @@ static mut PYXEL_READY: bool = false;
 static mut PY_UPDATE: Option<Py<PyAny>> = None;
 static mut PY_DRAW:   Option<Py<PyAny>> = None;
 
+/// lr-pyxel's own, independent Screencast instance, sized from a
+/// script's own pyxel.init(capture_sec=...) — separate from the Pyxel
+/// singleton's own internal one (frozen at Resource construction
+/// time, before any script's init() has ever run, with no public
+/// setter to resize it afterward). Only possible because Screencast
+/// is now re-exported at pyxel-core's crate root (see the
+/// expose-screencast-type branch on the pyxel-core fork) — its own
+/// new()/capture()/save() are all public, so this needed no other
+/// pyxel-core changes. Fed every should_update frame (see
+/// video.rs's capture_lr_screencast_frame(), called from retro.rs
+/// alongside pyxel_core::Pyxel::flip_screen()); consumed by
+/// screencast() (resource_wrapper_lr.rs), which uses this instead of
+/// pyxel_core's own save_screencast() whenever it's Some.
+static mut LR_SCREENCAST: Option<pyxel_core::Screencast> = None;
+
 // Audio batch callback (libretro stereo PCM output)
 static mut AUDIO_BATCH_CB: Option<unsafe extern "C" fn(*const i16, usize) -> usize> = None;
 

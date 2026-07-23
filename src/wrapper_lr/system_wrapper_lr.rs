@@ -89,20 +89,36 @@ pub fn init(
     // pyxel-core's frozen default; this just remembers init()'s value
     // to use as lr-pyxel's own substitute default when a call omits
     // scale, rather than falling through to pyxel-core's own.
+    //
     // capture_sec has no equivalent per-call override to piggyback on
     // (screencast()'s own signature has no `sec` parameter at all —
     // it's fixed by the ring buffer's size, not something
-    // customizable at save time), so that one's still genuinely
-    // stuck without a pyxel-core setter or an independent
-    // pyxel_core::Screencast instance (see the backlog notes on
-    // that).
-    let _ = (title, quit_key, display_scale, capture_sec);
+    // customizable at save time) — but IS now honorable a different
+    // way: Screencast (screencast.rs) is public, just never re-
+    // exported at pyxel-core's crate root until now (see the
+    // expose-screencast-type branch on the pyxel-core fork). Building
+    // our own independent instance sized from this argument, rather
+    // than needing a setter on the Pyxel singleton's own frozen one,
+    // needed no other pyxel-core changes.
+    let _ = (title, quit_key, display_scale);
     unsafe {
         LR_CAPTURE_SCALE = capture_scale;
         // Save game-requested size and FPS
         GAME_W = width.max(1);
         GAME_H = height.max(1);
         GAME_FPS = fps.unwrap_or(30).clamp(1, 60);
+
+        // 10 matches pyxel-core's own DEFAULT_CAPTURE_SEC (settings.rs)
+        // when a script doesn't specify capture_sec itself. Rebuilt
+        // fresh on every init() call (not just the first) so a script
+        // that calls pyxel.init() more than once with a different
+        // capture_sec — or re-runs via pyxel.reset()/retro_reset(),
+        // which re-execs the whole script from scratch — gets a
+        // correctly-sized buffer for whatever it asks for this time,
+        // discarding whatever was previously buffered (matching
+        // pyxel-core's own Resource::new() semantics: a fresh
+        // Screencast, not a resized one).
+        LR_SCREENCAST = Some(pyxel_core::Screencast::new(GAME_FPS, capture_sec.unwrap_or(10)));
 
         // Actually resize the physical canvas to match — this is the
         // authoritative source of truth (the script's real runtime
