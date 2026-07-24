@@ -11,13 +11,34 @@ use crate::*;
 // factored out so load_game_from_path() can snapshot "what's actually
 // held right now" as PREV_BUTTONS's new baseline, instead of blindly
 // zeroing it (see load_game_from_path()'s own comment on
-// PREV_BUTTONS for why that matters). Doesn't call INPUT_POLL itself
-// — the only place this gets called from (retro_run(), including via
-// load_game_from_path() further down the same call) has already
-// polled once at the very top of this frame, and re-polling
-// mid-frame isn't guaranteed safe/meaningful with every libretro
-// frontend.
+// PREV_BUTTONS for why that matters).
+//
+// Calls INPUT_POLL itself before reading state — libretro requires
+// retro_input_poll() before any retro_input_state() query, and none
+// of this function's callers are inside the retro_run() frame loop
+// itself (unlike the very similar polling retro_run() does directly).
+//
+// IMPORTANT — only call this from load_game_from_path(). Originally
+// also used from retro_load_game()'s own two branches and
+// launch_frontend(), for consistency, without separately verifying
+// each call site. Confirmed on real hardware that calling this from
+// retro_load_game()'s content-less branch SIGSEGVs — inside the very
+// first state() call, immediately after a successful poll() —
+// specifically when starting content-less a second time after
+// RetroArch's own Close Content, without an intervening retro_init().
+// The very first content-less start (right after retro_init()) and
+// real-content loads both happened not to crash, masking this until
+// that exact sequence was tried. load_game_from_path() itself is the
+// one call site actually exercised by the extensive on-device
+// pyxel.reset()/retro_reset() testing this function was built for
+// (v0.21.5: 30 rapid presses + 5 hold/release cycles, no issues) — the
+// other three call sites reverted to the simpler PREV_BUTTONS = 0 they
+// used before this function existed, since they were never part of
+// that verified scenario in the first place.
 unsafe fn poll_joypad_bitmask() -> u32 {
+    if let Some(poll) = INPUT_POLL {
+        poll();
+    }
     let mut buttons: u32 = 0;
     if let Some(state) = INPUT_STATE {
         for bit in 0u32..16 {
@@ -947,7 +968,28 @@ pub unsafe extern "C" fn retro_load_game(game: *const c_void) -> bool {
         RETRO_FRAME_COUNT = 0;
         *pyxel_core::frame_count() = 0;
         LR_FRAME_COUNT    = 0;
-        input::PREV_BUTTONS = poll_joypad_bitmask(); // see poll_joypad_bitmask()'s comment above
+        // NOT poll_joypad_bitmask() here — confirmed via on-device
+        // tracing that calling it from this specific call site
+        // (retro_load_game()'s content-less branch, reached a second
+        // time after RetroArch's own Close Content, without an
+        // intervening retro_init()) SIGSEGVs inside the very first
+        // state() call, immediately after a successful poll() —  even
+        // though the exact same poll()+state() sequence works fine
+        // from load_game_from_path() (used by pyxel.reset()/
+        // retro_reset(), extensively verified on-device — see
+        // v0.21.5) and from real-content loads. Looks like a
+        // RetroArch-side quirk specific to querying input state from
+        // retro_load_game() itself in this particular
+        // Close-Content-then-reload sequence, not something wrong on
+        // this side. Reverted to the simpler PREV_BUTTONS = 0 this
+        // call site had before poll_joypad_bitmask() existed —  this
+        // path was never actually part of the reset()-loop bug
+        // poll_joypad_bitmask() was built to fix (that was
+        // specifically about pyxel.reset()/retro_reset(), both of
+        // which go through load_game_from_path(), not here) — it was
+        // only changed here for consistency, without being separately
+        // verified, which is exactly how this got missed until now.
+        input::PREV_BUTTONS = 0;
         PENDING_BUTTON_RESET = true; // deferred — see lib.rs's comment on this flag
         reset_color_palette();
         reset_channel_gains();
@@ -1049,7 +1091,10 @@ pub unsafe extern "C" fn retro_load_game(game: *const c_void) -> bool {
         RETRO_FRAME_COUNT = 0;
         *pyxel_core::frame_count() = 0;
         LR_FRAME_COUNT    = 0;
-        input::PREV_BUTTONS = poll_joypad_bitmask(); // see poll_joypad_bitmask()'s comment above
+        // See the matching comment in this function's content-less
+        // branch above — not verified safe from this call site either,
+        // reverted to the pre-poll_joypad_bitmask() behavior.
+        input::PREV_BUTTONS = 0;
         PENDING_BUTTON_RESET = true; // deferred — see lib.rs's comment on this flag
         reset_color_palette();
         reset_channel_gains();
@@ -1370,7 +1415,10 @@ unsafe fn launch_frontend() {
     RETRO_FRAME_COUNT = 0;
     *pyxel_core::frame_count() = 0;
     LR_FRAME_COUNT    = 0;
-    input::PREV_BUTTONS = poll_joypad_bitmask(); // see poll_joypad_bitmask()'s comment above
+    // See the matching comment in retro_load_game()'s content-less
+    // branch — not verified safe from this call site either, reverted
+    // to the pre-poll_joypad_bitmask() behavior.
+    input::PREV_BUTTONS = 0;
     PENDING_BUTTON_RESET = true; // deferred — see lib.rs's comment on this flag
     reset_color_palette();
     reset_channel_gains();
