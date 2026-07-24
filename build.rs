@@ -10,22 +10,24 @@
 // it resolves to whatever `python3` on PATH actually is (e.g. "3.12"),
 // with no code changes needed either place.
 //
-// PyO3 0.29 change: pyo3-build-config no longer resolves/inlines the
-// interpreter config itself. Instead, pyo3-ffi's own build script
-// resolves it and serializes it into the DEP_PYTHON_PYO3_CONFIG env
-// var (visible here because this crate already depends on `pyo3`,
-// which pulls in pyo3-ffi). InterpreterConfig::from_cargo_dep_env()
-// reads that env var back out. This function is #[doc(hidden)] in
-// pyo3-build-config (not officially stable API), but it's the same
-// mechanism PyO3 itself relies on internally, matching the intent
-// described in the 0.29 migration guide.
+// pyo3_build_config::get() is the crate's own public, documented
+// entry point for this ("Loads the configuration determined from the
+// build environment... requires a direct dependency on at least one
+// of pyo3 or pyo3-ffi" — matches this build.rs's own situation
+// exactly). Previously called InterpreterConfig::from_cargo_dep_env()
+// directly, which get() itself wraps internally — but that function
+// went from merely-undocumented (0.21, still worked here) to
+// pub(crate)-private (0.29, fails to even compile) between versions,
+// confirmed by checking pyo3-build-config's own source rather than
+// guessing. get() is the stable path that isn't going anywhere,
+// since it's what pyo3-build-config itself documents as the intended
+// way for a dependent build script to do exactly this.
 
 fn main() {
-    let config = pyo3_build_config::InterpreterConfig::from_cargo_dep_env()
-        .expect("DEP_PYTHON_PYO3_CONFIG is not set — is `pyo3` (or `pyo3-ffi`) a dependency?")
-        .expect("failed to parse pyo3's interpreter config");
+    let config = pyo3_build_config::get();
+    let version = config.version();
     println!(
         "cargo:rustc-env=LR_PYXEL_PYTHON_VERSION={}.{}",
-        config.version.major, config.version.minor
+        version.major, version.minor
     );
 }

@@ -1,17 +1,13 @@
 [package]
 name = "lr-pyxel"
-version = "0.21.8"
+version = "0.21.9"
 edition = "2021"
 
 [lib]
 crate-type = ["cdylib"]
 
 [features]
-# v0.11.x de-Lakka-ification: gates Lakka/LibreELEC-specific defaults
-# (e.g. ROMS_DIR="/storage/roms/pyxel"). Not a default feature — Lakka
-# builds must opt in explicitly (package.mk passes --features lakka).
-# Plain `cargo build` (e.g. for a generic Linux RetroArch) gets
-# non-Lakka-specific defaults instead.
+# The "lakka" feature is used to determine whether to create a Lakka build.
 lakka = []
 
 [dependencies]
@@ -21,12 +17,8 @@ pyo3-ffi = "0.29"
 blip_buf = "0.1"
 zip = { version = "8.1", default-features = false, features = ["deflate"] }
 libc = "0.2"
+ureq = "3.3"
 pyxel-core = { git = "https://github.com/ShigeakiAsai/pyxel.git", branch = "lr-pyxel", package = "pyxel-core", features = ["sdl2_static", "no_headless_audio"] }
 
 [build-dependencies]
-# Used by build.rs to detect whatever Python version PyO3 actually
-# linked against (3.11 on Lakka's cross-compile, whatever the local
-# python3 is on a native non-Lakka build, e.g. 3.12 on Ubuntu 24.04),
-# so the RTLD_GLOBAL re-dlopen in retro_init() targets the right
-# libpythonX.Y.so instead of a hardcoded version.
-pyo3-build-config = "0.21"
+pyo3-build-config = "0.29"
